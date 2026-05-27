@@ -43,6 +43,25 @@ function shortDateTime(value?: string | null) {
   return date.toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+function daysSince(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return Math.floor((Date.now() - date.getTime()) / 86400000);
+}
+
+function birthdayInNextDays(value?: string | null, days = 30) {
+  if (!value) return false;
+  const source = new Date(value);
+  if (Number.isNaN(source.getTime())) return false;
+  const now = new Date();
+  const next = new Date(now.getFullYear(), source.getMonth(), source.getDate());
+  if (next.getTime() < new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) {
+    next.setFullYear(now.getFullYear() + 1);
+  }
+  return Math.ceil((next.getTime() - now.getTime()) / 86400000) <= days;
+}
+
 function MiniRow({ title, text }: { title: string; text: string }) {
   return (
     <View style={styles.miniRow}>
@@ -86,6 +105,7 @@ export function ClientsScreen({
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'blocked' | 'inactive'>('all');
   const [levelFilter, setLevelFilter] = useState<'all' | 'bronze' | 'silver' | 'gold' | 'platinum'>('all');
   const [sortMode, setSortMode] = useState<'updated' | 'bonus' | 'created' | 'activity'>('updated');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'birthday' | 'sleeping' | 'referral'>('all');
   const [noteDraft, setNoteDraft] = useState('');
 
   const canViewClients = ['technician', 'owner', 'manager'].includes(currentUser.role);
@@ -100,6 +120,12 @@ export function ClientsScreen({
     })
     .filter((client) => statusFilter === 'all' || client.status === statusFilter)
     .filter((client) => levelFilter === 'all' || client.loyalty_level === levelFilter)
+    .filter((client) => {
+      if (quickFilter === 'birthday') return birthdayInNextDays(client.birthday);
+      if (quickFilter === 'sleeping') return (daysSince(client.last_visit_at ?? client.created_at) ?? 0) >= 30;
+      if (quickFilter === 'referral') return Number(client.invited_count ?? 0) > 0 || Boolean(client.referred_by);
+      return true;
+    })
     .sort((a, b) => {
       if (sortMode === 'bonus') return Number(b.bonus_balance ?? 0) - Number(a.bonus_balance ?? 0);
       if (sortMode === 'created') return String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''));
@@ -111,6 +137,9 @@ export function ClientsScreen({
 
   const activeClients = clients.filter((client) => client.status === 'active').length;
   const totalBonus = clients.reduce((sum, client) => sum + Number(client.bonus_balance ?? 0), 0);
+  const birthdaySoon = clients.filter((client) => birthdayInNextDays(client.birthday)).length;
+  const sleepingClients = clients.filter((client) => (daysSince(client.last_visit_at ?? client.created_at) ?? 0) >= 30).length;
+  const referralClients = clients.filter((client) => Number(client.invited_count ?? 0) > 0 || Boolean(client.referred_by)).length;
   const selectedNotes = selected
     ? (snapshot.guest_notes ?? [])
         .filter((note) => note.guest_id === selected.id || note.guest_phone === selected.phone)
@@ -132,6 +161,16 @@ export function ClientsScreen({
         <MetricCard label="Бонусы" value={totalBonus} detail="на всех картах" />
         <MetricCard label="Операции" value={transactions.length} detail="последние записи" />
       </View>
+      <Card tone="soft">
+        <Text style={styles.cardTitle}>Быстрые CRM-сегменты</Text>
+        <Text style={styles.mutedText}>Фильтры для действий управляющего: поздравить, вернуть, проверить приглашения.</Text>
+        <View style={styles.rowActions}>
+          <SecondaryButton title="Все" compact onPress={() => setQuickFilter('all')} />
+          <SecondaryButton title={`ДР скоро: ${birthdaySoon}`} compact onPress={() => setQuickFilter('birthday')} />
+          <SecondaryButton title={`Давно не были: ${sleepingClients}`} compact onPress={() => setQuickFilter('sleeping')} />
+          <SecondaryButton title={`Рефералы: ${referralClients}`} compact onPress={() => setQuickFilter('referral')} />
+        </View>
+      </Card>
       <SegmentBroadcastPanel onMutate={onMutate} onSent={() => undefined} />
       <Field label="Поиск" value={search} onChangeText={setSearch} placeholder="Имя, телефон или код" />
       <View style={styles.categoryRow}>
@@ -201,6 +240,9 @@ export function ClientsScreen({
               <Text style={styles.bodyText}>
                 {client.bonus_balance} бонусов · {client.loyalty_level_label ?? client.loyalty_level}
               </Text>
+              <Text style={styles.mutedText}>
+                {client.birthday ? `ДР ${client.birthday}` : 'ДР не указан'} · {client.last_visit_at ? `визит ${shortDateTime(client.last_visit_at)}` : 'визитов ещё нет'} · пригласил {client.invited_count ?? 0}
+              </Text>
             </View>
             <Pill label={client.status} tone={roleTone(client.status)} />
           </View>
@@ -259,6 +301,14 @@ export function ClientsScreen({
             <MiniRow title="Кто пригласил" text={selected.referrer_name ?? selected.referred_by ?? 'Не указан'} />
             <MiniRow title="Приглашено друзей" text={`${selected.invited_count ?? 0}`} />
             <MiniRow title="Визиты и средний чек" text={`${selected.visits_count ?? 0} визитов · ${selected.average_check ?? 0} ₽`} />
+          </Card>
+        ) : null}
+        {selected ? (
+          <Card tone="soft">
+            <Text style={styles.cardTitle}>Реферальная программа</Text>
+            <MiniRow title="Сообщение гостю" text="Пригласите друга: друг вводит ваш код при регистрации, бонусы начисляются в карту." />
+            <MiniRow title="Код для друга" text={selected.referral_code} />
+            <MiniRow title="Результат" text={`${selected.invited_count ?? 0} приглашений · ${selected.referrer_name ? `пришёл от ${selected.referrer_name}` : 'самостоятельная регистрация'}`} />
           </Card>
         ) : null}
         {selected ? (

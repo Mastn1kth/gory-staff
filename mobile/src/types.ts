@@ -246,6 +246,7 @@ export type TableStatus =
   | 'reserved'
   | 'expected'
   | 'soon_free'
+  | 'bill_waiting'
   | 'closed'
   | 'cleaning'
   | 'soon_reserved'

@@ -310,6 +310,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900',
   },
+  reminderRow: {
+    marginTop: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 248, 234, 0.7)',
+    padding: 10,
+    gap: 10,
+  },
+  reminderActions: {
+    gap: 8,
+    alignItems: 'flex-start',
+  },
   pinned: {
     marginTop: 12,
     borderRadius: 12,

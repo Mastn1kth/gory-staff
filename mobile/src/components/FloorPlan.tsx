@@ -23,6 +23,7 @@ const statusActions: { status: TableStatus; label: string }[] = [
   { status: 'occupied', label: 'Занят' },
   { status: 'reserved', label: 'Бронь' },
   { status: 'expected', label: 'Гости пришли' },
+  { status: 'bill_waiting', label: 'Ждут счёт' },
   { status: 'cleaning', label: 'На уборку' },
   { status: 'closed', label: 'Закрыть' },
 ];
@@ -54,6 +55,7 @@ export function FloorPlan({
   const [width, setWidth] = useState(0);
 
   const waiters = snapshot.users.filter((user) => user.role === 'waiter');
+  const activeWaiters = waiters.filter((user) => !['blocked', 'fired', 'inactive'].includes(user.status));
   const currentFloor = snapshot.floors.find((floor) => floor.id === floorId) ?? snapshot.floors[0];
   const tables = useMemo(() => {
     const list = snapshot.tables.filter((table) => table.floor_id === currentFloor?.id);
@@ -95,6 +97,8 @@ export function FloorPlan({
   const selectedReservation = selected ? reservationsByTable.get(selected.id)?.[0] : undefined;
   const activeGuestSession = selected ? activeSessionsByTable.get(selected.id) : undefined;
   const selectedOrderItems = selected ? orderItemsByTable.get(selected.id) ?? [] : [];
+  const selectedIsMine = Boolean(selected && selected.current_waiter_id === snapshot.current_user.id);
+  const canOperateSelected = Boolean(selected && (canManage || selectedIsMine));
   const canSendSignals = Boolean(onMutate) && ['waiter', 'hostess', 'administrator', 'manager', 'technician'].includes(snapshot.current_user.role);
 
   return (
@@ -113,7 +117,7 @@ export function FloorPlan({
       ) : null}
 
       <View style={styles.legend}>
-        {(['free', 'occupied', 'reserved', 'cleaning', 'soon_reserved', 'banquet'] as TableStatus[]).map((status) => (
+        {(['free', 'occupied', 'reserved', 'bill_waiting', 'cleaning', 'soon_reserved', 'banquet'] as TableStatus[]).map((status) => (
           <View key={status} style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: tableStatusColor[status] }]} />
             <Text style={styles.legendText}>{tableStatusLabel[status]}</Text>
@@ -219,7 +223,7 @@ export function FloorPlan({
               </>
             ) : null}
 
-            {selected.status === 'cleaning' && (canManage || (snapshot.current_user.role === 'waiter' && selected.current_waiter_id === snapshot.current_user.id)) ? (
+            {selected.status === 'cleaning' && canOperateSelected ? (
               <SecondaryButton
                 title="Стол готов"
                 compact
@@ -230,7 +234,7 @@ export function FloorPlan({
               />
             ) : null}
 
-            {canManage ? (
+            {canOperateSelected ? (
               <>
                 <Text style={styles.blockTitle}>Действия со столом</Text>
                 <View style={styles.actionGrid}>
@@ -246,9 +250,14 @@ export function FloorPlan({
                     />
                   ))}
                 </View>
+              </>
+            ) : null}
+
+            {canManage ? (
+              <>
                 <Text style={styles.blockTitle}>Назначить официанта</Text>
                 <View style={styles.actionGrid}>
-                  {waiters.map((waiter) => (
+                  {activeWaiters.map((waiter) => (
                     <SecondaryButton
                       key={waiter.id}
                       title={waiter.name.split(' ')[0]}
@@ -259,6 +268,30 @@ export function FloorPlan({
                       }}
                     />
                   ))}
+                </View>
+              </>
+            ) : null}
+
+            {canOperateSelected && onMutate ? (
+              <>
+                <Text style={styles.blockTitle}>Передать стол</Text>
+                <View style={styles.actionGrid}>
+                  {activeWaiters
+                    .filter((waiter) => waiter.id !== selected.current_waiter_id)
+                    .map((waiter) => (
+                      <SecondaryButton
+                        key={waiter.id}
+                        title={waiter.name.split(' ')[0]}
+                        compact
+                        onPress={async () => {
+                          const updated = await onMutate('POST', `/tables/${selected.id}/transfer`, {
+                            target_waiter_id: waiter.id,
+                            expected_version: selected.version,
+                          });
+                          if (updated && typeof updated === 'object') setSelected(updated as RestaurantTable);
+                        }}
+                      />
+                    ))}
                 </View>
               </>
             ) : null}

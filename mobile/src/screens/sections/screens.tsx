@@ -65,6 +65,29 @@ const orderStatusLabels: Record<string, string> = {
   served: 'Принесли',
   cancelled: 'Отменено',
 };
+
+function minutesUntilReservation(reservation: Reservation) {
+  const dateTime = new Date(`${reservation.date?.slice(0, 10)}T${reservation.time ?? '00:00'}:00`);
+  if (Number.isNaN(dateTime.getTime())) return null;
+  return Math.round((dateTime.getTime() - Date.now()) / 60000);
+}
+
+function reservationReminderLabel(reservation: Reservation) {
+  const minutes = minutesUntilReservation(reservation);
+  if (minutes === null) return 'Проверить';
+  if (minutes < -15) return 'Просрочена';
+  if (minutes <= 0) return 'Сейчас';
+  if (minutes < 60) return `Через ${minutes} мин`;
+  return `Через ${Math.round(minutes / 60)} ч`;
+}
+
+function reservationNeedsReminder(reservation: Reservation) {
+  if (!['new', 'confirmed', 'waiting'].includes(reservation.status)) return false;
+  const minutes = minutesUntilReservation(reservation);
+  if (minutes === null) return reservation.call_status === 'need_call' || reservation.call_status === 'not_called';
+  return minutes >= -15 && minutes <= 180;
+}
+
 export function HomeScreen({ snapshot, navigate, onMutate, onRefresh }: SectionProps) {
   const today = todayISO();
   const freeTables = snapshot.tables.filter((table) => table.status === 'free').length;
@@ -309,6 +332,10 @@ export function ReservationsScreen({ snapshot, onMutate }: SectionProps) {
   });
   const activeReservations = filtered.filter((reservation) => !['guests_arrived', 'seated', 'guests_left', 'cancelled', 'no_show'].includes(reservation.status));
   const archivedReservations = filtered.filter((reservation) => !activeReservations.includes(reservation));
+  const reservationReminders = activeReservations
+    .filter(reservationNeedsReminder)
+    .sort((a, b) => String(`${a.date} ${a.time}`).localeCompare(String(`${b.date} ${b.time}`)))
+    .slice(0, 5);
 
   return (
     <ScreenScroll>
@@ -318,6 +345,37 @@ export function ReservationsScreen({ snapshot, onMutate }: SectionProps) {
         </View>
       ) : null}
       <Field label="Поиск брони" value={query} onChangeText={setQuery} placeholder="Имя, телефон или комментарий" />
+      {reservationReminders.length ? (
+        <Card tone="soft">
+          <View style={styles.rowBetween}>
+            <View style={styles.flex}>
+              <Text style={styles.cardTitle}>Напоминания по броням</Text>
+              <Text style={styles.mutedText}>Ближайшие гости, которых нужно встретить или подтвердить.</Text>
+            </View>
+            <Pill label={`${reservationReminders.length}`} tone="warn" />
+          </View>
+          {reservationReminders.map((reservation) => (
+            <View key={`reminder-${reservation.id}`} style={styles.reminderRow}>
+              <View style={styles.flex}>
+                <Text style={styles.cardTitle}>{reservation.guest_name}</Text>
+                <Text style={styles.mutedText}>
+                  {shortDate(reservation.date)} · {reservation.time} · {tableName(snapshot, reservation.table_id)}
+                </Text>
+                <Text style={styles.bodyText}>{reservation.call_status === 'confirmed' ? 'Звонок подтверждён' : 'Нужно подтвердить или встретить гостей'}</Text>
+              </View>
+              <View style={styles.reminderActions}>
+                <Pill label={reservationReminderLabel(reservation)} tone="warn" />
+                {manageable ? (
+                  <View style={styles.actionGrid}>
+                    <SecondaryButton title="Подтв." compact onPress={() => onMutate('PATCH', `/reservations/${reservation.id}`, { call_status: 'confirmed' })} />
+                    <SecondaryButton title="Не ответ" compact onPress={() => onMutate('PATCH', `/reservations/${reservation.id}`, { call_status: 'not_answered' })} />
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          ))}
+        </Card>
+      ) : null}
       {activeReservations.map((reservation) => (
         <Card key={reservation.id}>
           <View style={styles.rowBetween}>
@@ -1328,6 +1386,7 @@ export function NotificationsScreen({ snapshot, onMutate }: SectionProps) {
   const [form, setForm] = useState({ title: '', text: '', target_role: 'all', importance: 'important' });
   const manageable = canManage(snapshot.permissions, 'manage:announcements');
   const unread = snapshot.notifications.filter((item) => !item.is_read).length;
+  const pushDisabled = snapshot.connection?.push_disabled || snapshot.push_status?.active_devices === 0;
 
   return (
     <ScreenScroll>
@@ -1340,6 +1399,24 @@ export function NotificationsScreen({ snapshot, onMutate }: SectionProps) {
         <MetricCard label="Непрочитано" value={unread} />
         <MetricCard label="Всего" value={snapshot.notifications.length} />
       </View>
+      <Card tone={pushDisabled ? 'soft' : 'light'}>
+        <View style={styles.rowBetween}>
+          <View style={styles.flex}>
+            <Text style={styles.cardTitle}>Push-уведомления</Text>
+            <Text style={styles.mutedText}>
+              {snapshot.connection?.push_disabled
+                ? 'Push отключён на сервере.'
+                : snapshot.push_status?.active_devices
+                  ? `Активных устройств: ${snapshot.push_status.active_devices}`
+                  : 'Нет активного устройства для push.'}
+            </Text>
+          </View>
+          <Pill label={pushDisabled ? 'Проверить' : 'Готово'} tone={pushDisabled ? 'warn' : 'good'} />
+        </View>
+        <View style={styles.actionGrid}>
+          <SecondaryButton title="Тест push" compact onPress={() => onMutate('POST', '/push/test')} />
+        </View>
+      </Card>
       {snapshot.notifications.map((item) => (
         <Card key={item.id} tone={item.is_read ? 'light' : 'soft'}>
           <View style={styles.rowBetween}>

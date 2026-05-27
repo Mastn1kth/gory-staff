@@ -1,5 +1,33 @@
 const { requireExpectedVersion, sendVersionConflict } = require('../concurrency');
 
+const tableStatusLabels = {
+  free: 'Свободен',
+  occupied: 'Занят',
+  reserved: 'Бронь',
+  expected: 'Гости пришли',
+  soon_free: 'Скоро освободится',
+  bill_waiting: 'Ждут счёт',
+  cleaning: 'На уборке',
+  closed: 'Закрыт',
+  soon_reserved: 'Скоро бронь',
+  banquet: 'Банкет',
+};
+
+const waiterEditableTableFields = new Set(['status', 'comment']);
+
+function tableStatusText(status) {
+  return tableStatusLabels[status] ?? status;
+}
+
+function isAssignedWaiterTableUpdate(user, table, entries) {
+  return (
+    user.role === 'waiter' &&
+    table.current_waiter_id === user.id &&
+    entries.length > 0 &&
+    entries.every(([key]) => waiterEditableTableFields.has(key))
+  );
+}
+
 function registerFloorRoutes(app, deps) {
   const {
     pool,
@@ -49,13 +77,14 @@ function registerFloorRoutes(app, deps) {
         }
 
         const statusOnly = entries.length === 1 && entries[0][0] === 'status';
+        const assignedWaiterUpdate = isAssignedWaiterTableUpdate(req.user, oldRow, entries);
         const waiterMarksReady =
           req.user.role === 'waiter' &&
           statusOnly &&
           oldRow.current_waiter_id === req.user.id &&
           oldRow.status === 'cleaning' &&
           req.body.status === 'free';
-        if (!can(req.user.role, 'manage:floor') && !waiterMarksReady) {
+        if (!can(req.user.role, 'manage:floor') && !waiterMarksReady && !assignedWaiterUpdate) {
           res.status(403).json({ error: 'Нет прав менять этот стол.' });
           await client.query('ROLLBACK');
           return;
@@ -86,7 +115,7 @@ function registerFloorRoutes(app, deps) {
         if (oldRow.status !== updated.rows[0].status) {
           await createRoleNotifications(client, ['hostess', 'management'], {
             title: `Стол ${updated.rows[0].number}: обновлён статус`,
-            text: `Новый статус: ${updated.rows[0].status}`,
+            text: `Новый статус: ${tableStatusText(updated.rows[0].status)}`,
             type: 'table',
             data: { table_id: req.params.id },
           });
@@ -94,7 +123,7 @@ function registerFloorRoutes(app, deps) {
             await createNotification(client, {
               userId: updated.rows[0].current_waiter_id,
               title: `Стол ${updated.rows[0].number}: новый статус`,
-              text: `Статус: ${updated.rows[0].status}`,
+              text: `Статус: ${tableStatusText(updated.rows[0].status)}`,
               type: 'table_status',
               data: { table_id: req.params.id },
             });
@@ -111,6 +140,97 @@ function registerFloorRoutes(app, deps) {
         }
         await client.query('COMMIT');
         emitChange('tables', 'updated', updated.rows[0]);
+        res.json(updated.rows[0]);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  app.post(
+    '/tables/:id/transfer',
+    authMiddleware,
+    asyncHandler(async (req, res) => {
+      const targetWaiterId = String(req.body?.target_waiter_id ?? req.body?.current_waiter_id ?? '').trim();
+      if (!targetWaiterId) {
+        res.status(400).json({ error: 'Выберите официанта для передачи стола.' });
+        return;
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const oldRow = await rowById(client, 'tables', req.params.id);
+        if (!oldRow) {
+          res.status(404).json({ error: 'Столик не найден.' });
+          await client.query('ROLLBACK');
+          return;
+        }
+
+        const canTransfer = can(req.user.role, 'manage:floor') || (req.user.role === 'waiter' && oldRow.current_waiter_id === req.user.id);
+        if (!canTransfer) {
+          res.status(403).json({ error: 'Передать можно только свой стол или стол при управлении залом.' });
+          await client.query('ROLLBACK');
+          return;
+        }
+
+        const waiter = (
+          await client.query(
+            `SELECT id, name, status
+             FROM users
+             WHERE id = $1
+               AND role = 'waiter'
+               AND status NOT IN ('blocked', 'fired', 'inactive')
+             LIMIT 1`,
+            [targetWaiterId],
+          )
+        ).rows[0];
+        if (!waiter) {
+          res.status(400).json({ error: 'Выбранный сотрудник не является активным официантом.' });
+          await client.query('ROLLBACK');
+          return;
+        }
+
+        const expectedVersion = requireExpectedVersion(req, res, oldRow);
+        if (!expectedVersion) {
+          await client.query('ROLLBACK');
+          return;
+        }
+
+        const updated = await client.query(
+          `UPDATE "tables"
+           SET current_waiter_id = $3,
+               version = version + 1,
+               updated_at = NOW()
+           WHERE id = $1 AND version = $2
+           RETURNING *`,
+          [req.params.id, expectedVersion, targetWaiterId],
+        );
+        if (!updated.rows[0]) {
+          sendVersionConflict(res, await rowById(client, 'tables', req.params.id));
+          await client.query('ROLLBACK');
+          return;
+        }
+
+        await logActivity(client, req.user.id, 'table.transferred', 'table', req.params.id, oldRow, updated.rows[0]);
+        await createNotification(client, {
+          userId: targetWaiterId,
+          title: `Вам передан стол ${updated.rows[0].number}`,
+          text: `${req.user.name} передал стол. Статус: ${tableStatusText(updated.rows[0].status)}`,
+          type: 'table_transferred',
+          data: { table_id: req.params.id, from_user_id: req.user.id },
+        });
+        await createRoleNotifications(client, ['hostess', 'management'], {
+          title: `Стол ${updated.rows[0].number}: передан официанту`,
+          text: `Теперь отвечает ${waiter.name}`,
+          type: 'table_transfer',
+          data: { table_id: req.params.id, waiter_id: targetWaiterId },
+        });
+        await client.query('COMMIT');
+        emitChange('tables', 'transferred', updated.rows[0]);
         res.json(updated.rows[0]);
       } catch (error) {
         await client.query('ROLLBACK');

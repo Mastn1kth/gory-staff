@@ -121,6 +121,6 @@ export function tableName(snapshot: DataSnapshot, id?: string | null) {
 export function roleTone(status?: string) {
   if (status === 'on_shift' || status === 'active' || status === 'done' || status === 'free') return 'good' as const;
   if (status === 'cancelled' || status === 'out' || status === 'occupied') return 'bad' as const;
-  if (status === 'soon_out' || status === 'waiting' || status === 'reserved') return 'warn' as const;
+  if (status === 'soon_out' || status === 'waiting' || status === 'reserved' || status === 'bill_waiting') return 'warn' as const;
   return 'neutral' as const;
 }

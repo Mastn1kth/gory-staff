@@ -133,6 +133,7 @@ Notifications.setNotificationHandler({
 
 function actionTypeForMutation(method: string, path: string) {
   const normalizedMethod = method.toUpperCase();
+  if (/^\/tables\/[^/]+\/transfer$/.test(path)) return 'table_transfer';
   if (path.startsWith('/tables/')) return 'table_status';
   if (path.startsWith('/reservations')) return normalizedMethod === 'POST' ? 'reservation_create' : 'reservation_update';
   if (path.startsWith('/stop-list')) return normalizedMethod === 'POST' ? 'stop_list_add' : 'stop_list_update';
@@ -172,6 +173,8 @@ function versionedMutationTarget(method: string, path: string): { collection: ke
     if (checklistId) return { collection: 'shift_checklist', id: checklistId };
   }
   if (normalizedMethod === 'POST') {
+    const tableTransferId = match(/^\/tables\/([^/]+)\/transfer$/);
+    if (tableTransferId) return { collection: 'tables', id: tableTransferId };
     const reservationStatusId = match(/^\/reservations\/([^/]+)\/status$/);
     if (reservationStatusId) return { collection: 'reservations', id: reservationStatusId };
   }

@@ -41,3 +41,11 @@ test('guest registration uses birthday picker controls instead of manual date ty
   assert.match(guestAppSource, /title: "Выбрать"/);
   assert.doesNotMatch(guestAppSource, /label: "\\u0414\\u0430\\u0442\\u0430 \\u0440\\u043E\\u0436\\u0434\\u0435\\u043D\\u0438\\u044F"[\s\S]{0,260}placeholder: "\\u0413\\u0413\\u0413\\u0413-\\u041C\\u041C-\\u0414\\u0414"/);
 });
+
+test('guest profile does not wire push notification controls', () => {
+  assert.doesNotMatch(guestAppSource, /pushDiagnostics/);
+  assert.doesNotMatch(guestAppSource, /onEnablePush/);
+  assert.doesNotMatch(guestAppSource, /onTestPush/);
+  assert.doesNotMatch(guestAppSource, /registerGuestPushToken/);
+  assert.doesNotMatch(guestAppSource, /sendGuestTestPush/);
+});

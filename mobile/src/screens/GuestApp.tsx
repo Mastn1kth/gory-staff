@@ -29,15 +29,12 @@ import { createGuestOrderItem } from '../data/featureApi';
 import {
   checkServerConnection,
   getFixedApiUrl,
-  getPushDiagnostics,
   getStoredGuestSession,
   guestLogin,
   guestRegister,
   loadGuestMenu,
   loadGuestProfile,
   logoutGuest,
-  registerGuestPushToken,
-  sendGuestTestPush,
   updateGuestProfile,
 } from '../data/api';
 import { Card, EmptyState, Field, KeyboardAwareScrollView, ModalSheet, Pill, PrimaryButton, ScreenScroll, SecondaryButton, SectionTitle } from '../components/ui';
@@ -164,7 +161,6 @@ export function GuestApp({
     const [guestOffline, setGuestOffline] = useState(false);
     const [guestSyncing, setGuestSyncing] = useState(false);
     const [guestMessage, setGuestMessage] = useState(null);
-    const [pushDiagnostics, setPushDiagnostics] = useState(null);
     const [guestMode, setGuestMode] = useState(null);
     const [staffVisible, setStaffVisible] = useState(false);
     const [menuQuery, setMenuQuery] = useState('');
@@ -267,15 +263,6 @@ export function GuestApp({
       // Reconnect loop intentionally follows current guest session and offline status.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [guestOffline, guestSession?.token]);
-    useEffect(() => {
-      var alive = true;
-      getPushDiagnostics().then(diagnostics => {
-        if (alive) setPushDiagnostics(diagnostics);
-      }).catch(() => undefined);
-      return () => {
-        alive = false;
-      };
-    }, [guestSession?.token]);
     useEffect(() => {
       var index = Math.max(0, guestTabs.findIndex(tab => tab.key === initialTab));
       var tab = guestTabs[index];
@@ -390,30 +377,8 @@ export function GuestApp({
         var code = guestProfile?.referral.code || guestProfile?.guest.referral_code;
         if (!code) return;
         await Share.share({
-          message: `Мой код ресторана «Горы»: ${code}`
+          message: `Пригласи друга в «Горы»: друг вводит мой код ${code}, а бонусы падают на карту.`
         });
-}
-    async function enableGuestPush() {
-        if (!guestSession) {
-          setGuestMessage('Сначала войдите в гостевой профиль.');
-          return;
-        }
-        var diagnostics = await registerGuestPushToken(guestSession);
-        setPushDiagnostics(diagnostics);
-        setGuestMessage(diagnostics.token ? 'Уведомления подключены к этому телефону.' : diagnostics.error ?? 'Не удалось получить токен уведомлений.');
-}
-    async function testGuestPush() {
-        if (!guestSession) {
-          setGuestMessage('Сначала войдите в гостевой профиль.');
-          return;
-        }
-        try {
-          await sendGuestTestPush(guestSession);
-          setGuestMessage('Тестовое уведомление отправлено. Проверьте шторку уведомлений.');
-          await refreshGuestProfile(guestSession);
-        } catch (error) {
-          setGuestMessage(error instanceof Error ? error.message : 'Не удалось отправить тестовое уведомление.');
-        }
 }
     async function openRoute() {
         try {
@@ -463,9 +428,7 @@ export function GuestApp({
               offline: guestOffline,
               profile: guestProfile,
               guestSession: guestSession,
-              pushDiagnostics: pushDiagnostics,
               onCopyCode: copyReferralCode,
-              onEnablePush: enableGuestPush,
               onLogin: () => setGuestMode('login'),
               onLogout: handleGuestLogout,
               onEditProfile: () => setGuestEditVisible(true),
@@ -474,8 +437,7 @@ export function GuestApp({
               onShowCode: () => setReferralModalVisible(true),
               onShowLevel: () => setLoyaltyModalVisible(true),
               onShareCode: shareReferralCode,
-              onStaff: openStaffEntry,
-              onTestPush: testGuestPush
+              onStaff: openStaffEntry
             })
           }), /*#__PURE__*/jsx(GuestPage, {
             width: pageWidth,
@@ -588,9 +550,7 @@ export function GuestApp({
       offline = _ref3.offline,
       profile = _ref3.profile,
       guestSession = _ref3.guestSession,
-      pushDiagnostics = _ref3.pushDiagnostics,
       onCopyCode = _ref3.onCopyCode,
-      onEnablePush = _ref3.onEnablePush,
       onLogin = _ref3.onLogin,
       onLogout = _ref3.onLogout,
       onEditProfile = _ref3.onEditProfile,
@@ -599,8 +559,7 @@ export function GuestApp({
       onShowCode = _ref3.onShowCode,
       onShowLevel = _ref3.onShowLevel,
       onShareCode = _ref3.onShareCode,
-      onStaff = _ref3.onStaff,
-      onTestPush = _ref3.onTestPush;
+      onStaff = _ref3.onStaff;
     var guest = profile?.guest ?? null;
     return /*#__PURE__*/jsxs(KeyboardAwareScrollView, {
       contentContainerStyle: styles.content,
@@ -1216,7 +1175,7 @@ export function GuestApp({
           })]
         }), /*#__PURE__*/jsx(Text, {
           style: styles.referralHint,
-          children: "\u041F\u043E\u043A\u0430\u0436\u0438\u0442\u0435 \u044D\u0442\u043E\u0442 \u043A\u043E\u0434 \u0434\u0440\u0443\u0433\u0443 \u043F\u0440\u0438 \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u0438"
+          children: "\u041F\u0440\u0438\u0433\u043B\u0430\u0441\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u0430: \u043E\u043D \u0432\u0432\u043E\u0434\u0438\u0442 \u044D\u0442\u043E\u0442 \u043A\u043E\u0434 \u043F\u0440\u0438 \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u0438, \u0430 \u0431\u043E\u043D\u0443\u0441\u044B \u043F\u0430\u0434\u0430\u044E\u0442 \u043D\u0430 \u043A\u0430\u0440\u0442\u0443."
         })]
       }), /*#__PURE__*/jsxs(View, {
         style: styles.rowButtons,

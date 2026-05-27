@@ -364,6 +364,70 @@ test('table updates use optimistic concurrency and return current row on conflic
   assert.equal(missingVersion.body.current.id, table.id);
 });
 
+test('assigned waiter can mark bill waiting and transfer own table', async (t) => {
+  const server = await startTestServer({
+    INITIAL_MANAGER_LOGIN: 'owner@example.test',
+    INITIAL_MANAGER_PASSWORD: 'OwnerTestPass-2026!',
+    DEMO_STAFF_PASSWORD: 'StaffTestPass-2026!',
+  });
+  t.after(server.stop);
+
+  async function loginAs(login) {
+    const response = await api(server.baseUrl, '/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ login, password: login === 'owner@example.test' ? 'OwnerTestPass-2026!' : 'StaffTestPass-2026!' }),
+    });
+    const sync = await api(server.baseUrl, '/sync', {
+      headers: { Authorization: `Bearer ${response.token}` },
+    });
+    return { token: response.token, sync };
+  }
+
+  const manager = await loginAs('owner@example.test');
+  const waiter = await loginAs('waiter');
+  const nextWaiter = await loginAs('nino');
+
+  const table = manager.sync.tables[0];
+  const assigned = await api(server.baseUrl, `/tables/${table.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${manager.token}` },
+    body: JSON.stringify({ current_waiter_id: waiter.sync.current_user.id, status: 'occupied', expected_version: table.version }),
+  });
+
+  const billWaiting = await api(server.baseUrl, `/tables/${table.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${waiter.token}` },
+    body: JSON.stringify({ status: 'bill_waiting', expected_version: assigned.version }),
+  });
+  assert.equal(billWaiting.status, 'bill_waiting');
+  assert.equal(billWaiting.current_waiter_id, waiter.sync.current_user.id);
+
+  const transferred = await api(server.baseUrl, `/tables/${table.id}/transfer`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${waiter.token}` },
+    body: JSON.stringify({ target_waiter_id: nextWaiter.sync.current_user.id, expected_version: billWaiting.version }),
+  });
+  assert.equal(transferred.current_waiter_id, nextWaiter.sync.current_user.id);
+  assert.equal(transferred.status, 'bill_waiting');
+
+  const notOwnedTable = manager.sync.tables.find((item) => item.id !== table.id);
+  assert.ok(notOwnedTable);
+  const assignedToOther = await api(server.baseUrl, `/tables/${notOwnedTable.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${manager.token}` },
+    body: JSON.stringify({ current_waiter_id: nextWaiter.sync.current_user.id, status: 'occupied', expected_version: notOwnedTable.version }),
+  });
+  await assert.rejects(
+    () =>
+      api(server.baseUrl, `/tables/${notOwnedTable.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${waiter.token}` },
+        body: JSON.stringify({ status: 'bill_waiting', expected_version: assignedToOther.version }),
+      }),
+    (error) => error.status === 403,
+  );
+});
+
 test('guest table order flows through waiter and kitchen statuses', async (t) => {
   const server = await startTestServer({
     INITIAL_MANAGER_LOGIN: 'owner@example.test',
