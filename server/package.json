@@ -1,0 +1,27 @@
+{
+  "name": "@gory-staff/server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "dev:memory": "node --watch src/dev-memory.js",
+    "start": "node src/index.js",
+    "start:memory": "node src/dev-memory.js",
+    "db:init": "node src/index.js --init-only",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.16.3",
+    "pg-mem": "^3.0.14",
+    "socket.io": "^4.8.3",
+    "uuid": "^13.0.0"
+  }
+}

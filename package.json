@@ -1,0 +1,34 @@
+{
+  "name": "gory-staff",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "mobile",
+    "server"
+  ],
+  "scripts": {
+    "install:all": "npm install --workspaces",
+    "server": "npm --workspace server run dev",
+    "server:demo": "npm --workspace server run dev:memory",
+    "mobile": "npm --workspace mobile run start",
+    "typecheck": "npm --workspace mobile run typecheck",
+    "build:android:apk": "npx eas-cli@latest build --platform android --profile preview"
+  },
+  "overrides": {
+    "expo": "54.0.34",
+    "expo-font": "14.0.11",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "postcss": "8.5.14",
+    "ws": "8.20.1",
+    "engine.io": {
+      "ws": "8.20.1"
+    },
+    "engine.io-client": {
+      "ws": "8.20.1"
+    },
+    "socket.io-adapter": {
+      "ws": "8.20.1"
+    }
+  }
+}

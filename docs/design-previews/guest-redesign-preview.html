@@ -1,0 +1,1908 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Горы - гостевые превью</title>
+  <style>
+    :root {
+      --ink: #201711;
+      --muted: #8b8178;
+      --muted-2: #b7aea7;
+      --line: #e5ddd4;
+      --paper: #fffaf2;
+      --surface: #ffffff;
+      --cream: #f2e4ca;
+      --cream-2: #f8ecd7;
+      --dark: #24211e;
+      --brown: #4a2a1d;
+      --burgundy: #7a2637;
+      --burgundy-2: #a34233;
+      --gold: #d7a94a;
+      --green: #2f8c5b;
+      --blue: #3573a9;
+      --shadow: 0 22px 54px rgba(37, 24, 13, 0.18);
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      min-height: 100%;
+      background: #1b1714;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+    }
+
+    body.single {
+      width: 945px;
+      height: 2048px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    body.board {
+      padding: 44px;
+      background: #eee8de;
+    }
+
+    .boardWrap {
+      display: grid;
+      grid-template-columns: repeat(5, 390px);
+      gap: 28px;
+      align-items: start;
+    }
+
+    .boardWrap .phone {
+      width: 390px;
+      height: 844px;
+      transform-origin: top left;
+      box-shadow: 0 28px 60px rgba(24, 16, 9, 0.22);
+    }
+
+    .boardWrap .status { transform: scale(0.4127); transform-origin: top left; width: 945px; }
+    .boardWrap .content,
+    .boardWrap .bottomNav,
+    .boardWrap .floatingNav,
+    .boardWrap .mapSheet,
+    .boardWrap .locateButton {
+      transform: scale(0.4127);
+      transform-origin: top left;
+      width: 945px;
+    }
+
+    .phone {
+      position: relative;
+      width: 945px;
+      height: 2048px;
+      overflow: hidden;
+      background: #fff;
+      border-radius: 0;
+    }
+
+    .phone.cream { background: var(--paper); }
+    .phone.menu { background: #efedeb; }
+    .phone.map { background: #f6f1e7; }
+
+    .status {
+      position: absolute;
+      z-index: 12;
+      top: 50px;
+      left: 120px;
+      right: 80px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 44px;
+      font-weight: 760;
+      letter-spacing: -1px;
+      color: #111;
+    }
+
+    .status.light { color: #fff; }
+
+    .statusIcons {
+      display: flex;
+      gap: 24px;
+      align-items: center;
+      font-size: 36px;
+      font-weight: 800;
+    }
+
+    .battery {
+      min-width: 68px;
+      height: 36px;
+      border-radius: 11px;
+      background: rgba(0, 0, 0, 0.28);
+      color: #fff;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 27px;
+      font-weight: 800;
+      padding-bottom: 2px;
+    }
+
+    .content {
+      position: absolute;
+      z-index: 2;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 100%;
+      padding: 230px 48px 260px;
+    }
+
+    .content.narrow { padding-left: 58px; padding-right: 58px; }
+    .content.form { padding-top: 188px; }
+
+    .topLogo {
+      position: absolute;
+      right: 58px;
+      top: 142px;
+      width: 108px;
+      height: 108px;
+      border-radius: 54px;
+      background: var(--burgundy-2);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      line-height: 0.86;
+      font-size: 26px;
+      box-shadow: 0 10px 26px rgba(122, 38, 55, 0.18);
+    }
+
+    .topLogo small {
+      margin-top: 7px;
+      font-size: 14px;
+      letter-spacing: 2px;
+      font-weight: 700;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 82px;
+      line-height: 0.98;
+      font-weight: 860;
+      letter-spacing: -2px;
+    }
+
+    .subtitle {
+      margin: 88px 0 38px;
+      color: #938d88;
+      font-size: 33px;
+      line-height: 1.27;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      font-weight: 500;
+    }
+
+    .primary {
+      width: 100%;
+      height: 120px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--dark);
+      color: #fff;
+      font-size: 38px;
+      font-weight: 760;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: none;
+    }
+
+    .primary.burgundy {
+      background: linear-gradient(135deg, var(--burgundy), #431d18);
+      box-shadow: 0 20px 42px rgba(122, 38, 55, 0.22);
+    }
+
+    .sectionLabel {
+      margin: 148px 0 24px;
+      color: #9a948f;
+      font-size: 29px;
+      line-height: 1;
+      text-transform: uppercase;
+      letter-spacing: 1.8px;
+      font-weight: 580;
+    }
+
+    .sectionLabel.tight { margin-top: 58px; }
+
+    .row {
+      min-height: 122px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      font-size: 39px;
+      font-weight: 520;
+      background: #fff;
+    }
+
+    .row:last-child { border-bottom: 1px solid var(--line); }
+
+    .row .rowText { flex: 1; }
+
+    .row .rowSub {
+      display: block;
+      margin-top: 10px;
+      color: #988d84;
+      font-size: 24px;
+      font-weight: 500;
+    }
+
+    .arrow {
+      color: #c3bbb5;
+      font-size: 62px;
+      font-weight: 300;
+      padding-right: 2px;
+    }
+
+    .iconBox {
+      width: 56px;
+      height: 56px;
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+    }
+
+    .iconSvg {
+      width: 56px;
+      height: 56px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 4.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .bottomNav {
+      position: absolute;
+      z-index: 9;
+      left: 58px;
+      right: 58px;
+      bottom: 42px;
+      height: 156px;
+      background: rgba(255, 255, 255, 0.96);
+      border-top: 1px solid rgba(0, 0, 0, 0.13);
+      border-radius: 54px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      padding-top: 22px;
+      box-shadow: 0 18px 44px rgba(28, 18, 10, 0.15);
+    }
+
+    .navItem {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      color: #9b9691;
+      font-size: 27px;
+      font-weight: 650;
+    }
+
+    .navItem.active { color: #24211e; }
+    .navItem svg { width: 62px; height: 62px; stroke: currentColor; fill: none; stroke-width: 3.7; stroke-linecap: round; stroke-linejoin: round; }
+    .navItem.active .filledProfileHead { fill: currentColor; }
+
+    .guestCard {
+      margin-top: 48px;
+      width: 100%;
+      height: 390px;
+      border-radius: 32px;
+      background:
+        radial-gradient(circle at 78% 18%, rgba(215, 169, 74, 0.28), transparent 31%),
+        linear-gradient(135deg, #2b2018 0%, #452417 58%, #7a2637 100%);
+      color: #fff;
+      padding: 42px 44px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .guestCard:after {
+      content: "";
+      position: absolute;
+      inset: auto -130px -170px auto;
+      width: 420px;
+      height: 420px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .brandLine {
+      position: absolute;
+      right: 42px;
+      top: 42px;
+      width: 190px;
+      height: 82px;
+      opacity: 0.9;
+    }
+
+    .cardKicker {
+      font-size: 25px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: rgba(255, 255, 255, 0.72);
+      font-weight: 640;
+    }
+
+    .cardBalance {
+      margin-top: 62px;
+      font-size: 82px;
+      line-height: 0.92;
+      font-weight: 880;
+      letter-spacing: -2px;
+    }
+
+    .cardBalance span {
+      display: block;
+      margin-top: 10px;
+      font-size: 31px;
+      letter-spacing: 0;
+      color: rgba(255, 255, 255, 0.8);
+      font-weight: 620;
+    }
+
+    .cardNumber {
+      position: absolute;
+      left: 44px;
+      bottom: 36px;
+      font-size: 31px;
+      letter-spacing: 3px;
+      font-weight: 730;
+    }
+
+    .profileName {
+      margin-top: 28px;
+      font-size: 37px;
+      color: var(--muted);
+      font-weight: 540;
+    }
+
+    .quickGrid {
+      margin-top: 34px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .quick {
+      min-height: 118px;
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: 0 10px 28px rgba(44, 30, 19, 0.08);
+      padding: 24px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      justify-content: center;
+    }
+
+    .quick strong { font-size: 28px; line-height: 1.1; }
+    .quick span { font-size: 20px; color: var(--muted); font-weight: 580; }
+
+    .search {
+      margin-top: 50px;
+      height: 88px;
+      border-radius: 999px;
+      background: #dedddd;
+      color: #8f8c89;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 0 28px;
+      font-size: 38px;
+      font-weight: 480;
+    }
+
+    .promoStrip {
+      margin: 36px -48px 0 0;
+      height: 518px;
+      display: flex;
+      gap: 24px;
+      overflow: hidden;
+    }
+
+    .promo {
+      flex: 0 0 848px;
+      border-radius: 17px;
+      overflow: hidden;
+    }
+
+    .promoVisual {
+      height: 425px;
+      background: #f9ead4;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .promoVisual:before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 15% 22%, rgba(122, 38, 55, 0.12), transparent 9%),
+        radial-gradient(circle at 78% 70%, rgba(215, 169, 74, 0.18), transparent 13%),
+        radial-gradient(circle at 52% 42%, rgba(122, 38, 55, 0.09), transparent 18%);
+    }
+
+    .promoText {
+      position: absolute;
+      top: 48px;
+      right: 42px;
+      width: 520px;
+      color: #a83c25;
+      font-size: 45px;
+      line-height: 1.1;
+      font-weight: 870;
+      text-transform: uppercase;
+    }
+
+    .promoCaption {
+      height: 93px;
+      background: #efedeb;
+      color: #090909;
+      display: flex;
+      align-items: center;
+      padding-left: 4px;
+      font-size: 37px;
+      font-weight: 760;
+    }
+
+    .food {
+      position: absolute;
+      border-radius: 50%;
+      background: #8f2e2d;
+      box-shadow: inset 0 0 0 20px rgba(255,255,255,0.1), 0 12px 22px rgba(74,42,29,0.18);
+    }
+
+    .food.one { width: 176px; height: 176px; left: 32px; top: 34px; background: #8b353b; }
+    .food.two { width: 210px; height: 210px; left: 322px; top: 168px; background: #513525; }
+    .food.three { width: 184px; height: 184px; right: 48px; bottom: 42px; background: #8b353b; }
+    .food.four { width: 210px; height: 132px; left: 74px; bottom: 44px; border-radius: 50px; background: #c65c31; }
+
+    .herbs {
+      position: absolute;
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 30% 30%, #58a25f 0 7px, transparent 8px),
+        radial-gradient(circle at 70% 42%, #58a25f 0 7px, transparent 8px),
+        radial-gradient(circle at 40% 72%, #58a25f 0 7px, transparent 8px),
+        #f2d79a;
+    }
+
+    .herbs.a { left: 76px; top: 76px; }
+    .herbs.b { left: 380px; top: 224px; }
+    .herbs.c { right: 92px; bottom: 88px; }
+
+    .categoryList {
+      margin: 0 -48px;
+      background: #fff;
+      min-height: 900px;
+    }
+
+    .catRow {
+      min-height: 206px;
+      display: grid;
+      grid-template-columns: 290px 1fr 58px;
+      align-items: center;
+      gap: 48px;
+      padding: 0 38px;
+      border-bottom: 1px solid #ddd7d1;
+      font-size: 42px;
+      font-weight: 520;
+    }
+
+    .catThumb {
+      width: 290px;
+      height: 150px;
+      border-radius: 27px;
+      position: relative;
+      overflow: hidden;
+      background: #c54e39;
+    }
+
+    .catThumb.gold { background: #dba94d; }
+    .catThumb.pink { background: #bd8384; }
+    .catThumb.green { background: #7d9c6b; }
+
+    .catThumb:before,
+    .catThumb:after {
+      content: "";
+      position: absolute;
+      border-radius: 50%;
+      background: rgba(255, 250, 242, 0.92);
+      box-shadow: 42px 8px 0 rgba(87, 46, 26, 0.18), 72px 34px 0 rgba(245, 214, 139, 0.85);
+    }
+
+    .catThumb:before {
+      width: 118px;
+      height: 78px;
+      left: 48px;
+      top: 38px;
+      transform: rotate(-7deg);
+    }
+
+    .catThumb:after {
+      width: 78px;
+      height: 78px;
+      right: 46px;
+      bottom: 32px;
+    }
+
+    .mapCanvas {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(22deg, transparent 0 38%, rgba(251, 210, 81, 0.52) 39% 43%, transparent 44%),
+        linear-gradient(118deg, transparent 0 38%, rgba(210, 213, 216, 0.82) 39% 42%, transparent 43%),
+        linear-gradient(64deg, transparent 0 47%, rgba(210, 213, 216, 0.92) 48% 51%, transparent 52%),
+        linear-gradient(0deg, rgba(125, 183, 102, 0.22) 0 7%, transparent 7% 100%),
+        #f5f1e7;
+    }
+
+    .mapCanvas:before {
+      content: "";
+      position: absolute;
+      inset: -80px;
+      background:
+        repeating-linear-gradient(18deg, transparent 0 116px, rgba(198, 203, 207, 0.78) 118px 124px, transparent 126px 230px),
+        repeating-linear-gradient(93deg, transparent 0 142px, rgba(213, 216, 219, 0.72) 144px 150px, transparent 151px 282px);
+      opacity: 0.78;
+    }
+
+    .mapBlock {
+      position: absolute;
+      width: 210px;
+      height: 180px;
+      border-radius: 12px;
+      background: rgba(214, 204, 190, 0.62);
+      transform: rotate(18deg);
+    }
+
+    .mapLabel {
+      position: absolute;
+      color: rgba(119, 82, 68, 0.72);
+      font-size: 31px;
+      font-weight: 760;
+      line-height: 1.05;
+      text-shadow: 0 2px 0 rgba(255,255,255,0.65);
+    }
+
+    .mapLabel.pink { color: rgba(174, 65, 124, 0.72); }
+    .mapLabel.street {
+      color: rgba(42, 40, 39, 0.75);
+      font-weight: 650;
+      text-transform: uppercase;
+      transform: rotate(-28deg);
+    }
+
+    .mapPin {
+      position: absolute;
+      left: 405px;
+      top: 735px;
+      width: 140px;
+      height: 140px;
+      border-radius: 70px;
+      background: #b6422b;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      font-size: 38px;
+      font-weight: 900;
+      line-height: 0.8;
+      box-shadow: 0 0 0 16px #fff, 0 18px 32px rgba(74, 42, 29, 0.26);
+      z-index: 2;
+    }
+
+    .mapPin small { font-size: 18px; margin-top: 10px; letter-spacing: 1.5px; }
+
+    .locateButton {
+      position: absolute;
+      top: 112px;
+      right: 42px;
+      z-index: 4;
+      width: 122px;
+      height: 122px;
+      border-radius: 61px;
+      background: rgba(255,255,255,0.96);
+      box-shadow: 0 10px 28px rgba(25, 20, 16, 0.16);
+      display: grid;
+      place-items: center;
+      color: #222;
+    }
+
+    .locateButton svg { width: 64px; height: 64px; }
+
+    .mapSheet {
+      position: absolute;
+      z-index: 5;
+      left: 50px;
+      right: 50px;
+      bottom: 250px;
+      min-height: 470px;
+      border-radius: 44px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      padding: 62px 76px;
+    }
+
+    .handle {
+      position: absolute;
+      left: 50%;
+      top: 20px;
+      width: 72px;
+      height: 9px;
+      transform: translateX(-50%);
+      border-radius: 9px;
+      background: #bbb7b3;
+    }
+
+    .sheetTitle {
+      margin: 0 0 46px;
+      font-size: 52px;
+      line-height: 1;
+      font-weight: 850;
+      letter-spacing: -1px;
+    }
+
+    .infoRow {
+      display: grid;
+      grid-template-columns: 72px 1fr auto;
+      align-items: center;
+      gap: 28px;
+      min-height: 95px;
+      font-size: 37px;
+      color: #2a2724;
+    }
+
+    .infoRow .right { font-size: 32px; color: #3f3833; }
+
+    .routeButton {
+      margin-top: 34px;
+      height: 88px;
+      border-radius: 999px;
+      background: var(--dark);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 31px;
+      font-weight: 780;
+    }
+
+    .floatingNav {
+      position: absolute;
+      z-index: 6;
+      left: 84px;
+      right: 84px;
+      bottom: 66px;
+      height: 158px;
+      border-radius: 58px;
+      background: rgba(255,255,255,0.96);
+      box-shadow: 0 18px 44px rgba(28, 18, 10, 0.18);
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      padding-top: 25px;
+    }
+
+    .formTop {
+      display: flex;
+      align-items: center;
+      gap: 26px;
+      margin-bottom: 48px;
+    }
+
+    .backCircle {
+      width: 72px;
+      height: 72px;
+      border-radius: 36px;
+      border: 1px solid rgba(0,0,0,0.08);
+      background: #fff;
+      display: grid;
+      place-items: center;
+      font-size: 44px;
+      color: #29211c;
+      box-shadow: 0 8px 22px rgba(38, 26, 16, 0.08);
+    }
+
+    .formTitle { font-size: 64px; line-height: 1; font-weight: 860; letter-spacing: -1.5px; }
+
+    .formCard {
+      border-radius: 30px;
+      background: #fff;
+      box-shadow: 0 14px 34px rgba(44, 30, 19, 0.1);
+      overflow: hidden;
+    }
+
+    .fieldLine {
+      min-height: 135px;
+      padding: 28px 34px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .fieldLine:last-child { border-bottom: 0; }
+
+    .fieldLine label {
+      display: block;
+      color: #91877f;
+      font-size: 25px;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      font-weight: 660;
+      margin-bottom: 15px;
+    }
+
+    .fieldLine div {
+      font-size: 39px;
+      font-weight: 540;
+    }
+
+    .fieldHint {
+      color: #9a918a;
+      font-size: 28px !important;
+      line-height: 1.25;
+    }
+
+    .softPanel {
+      margin-top: 30px;
+      border-radius: 28px;
+      background: #f8ebd3;
+      padding: 34px;
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .softPanel strong { display: block; font-size: 34px; }
+    .softPanel span { display: block; margin-top: 9px; color: var(--muted); font-size: 25px; line-height: 1.2; }
+
+    .saveSticky {
+      position: absolute;
+      left: 58px;
+      right: 58px;
+      bottom: 238px;
+    }
+
+    .splashBg {
+      background:
+        radial-gradient(circle at 50% 44%, rgba(215, 169, 74, 0.1), transparent 34%),
+        #24211e;
+      color: #fff;
+    }
+
+    .splashLogo {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 560px;
+      text-align: center;
+      color: #fff;
+    }
+
+    .mountain {
+      width: 520px;
+      height: 92px;
+      margin: 0 auto 12px;
+    }
+
+    .splashLogo .word {
+      font-size: 148px;
+      line-height: 0.86;
+      font-weight: 900;
+      letter-spacing: -8px;
+    }
+
+    .splashLogo .tag {
+      margin-top: 32px;
+      font-size: 22px;
+      letter-spacing: 14px;
+      color: rgba(255,255,255,0.62);
+      text-transform: uppercase;
+      font-weight: 620;
+    }
+
+    .homeIndicator {
+      position: absolute;
+      z-index: 13;
+      bottom: 17px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 338px;
+      height: 11px;
+      border-radius: 999px;
+      background: #111;
+    }
+
+    .homeIndicator.light { background: #fff; }
+
+    .hidden { display: none !important; }
+
+    /* Premium Gory direction: keep the reference logic, return the old app mood. */
+    .phone:not(.map) {
+      background:
+        radial-gradient(circle at 86% 8%, rgba(215, 169, 74, 0.15), transparent 20%),
+        radial-gradient(circle at 14% 34%, rgba(122, 38, 55, 0.17), transparent 26%),
+        #21140f;
+      color: #fff8ea;
+    }
+
+    .phone:not(.map) .status {
+      color: #fff8ea;
+    }
+
+    .phone:not(.map) .battery {
+      background: rgba(215, 169, 74, 0.28);
+      color: #fff8ea;
+    }
+
+    .phone:not(.map) h1,
+    .phone:not(.map) .formTitle {
+      color: #fff8ea;
+    }
+
+    .phone:not(.map) .subtitle,
+    .phone:not(.map) .profileName,
+    .phone:not(.map) .sectionLabel {
+      color: rgba(255, 248, 234, 0.68);
+    }
+
+    .phone:not(.map) .topLogo,
+    .mapPin {
+      background: linear-gradient(135deg, #7a2637, #b63d36);
+      box-shadow: 0 18px 42px rgba(122, 38, 55, 0.34);
+    }
+
+    .phone:not(.map) .primary {
+      background:
+        linear-gradient(180deg, rgba(255, 248, 234, 0.12), rgba(255, 248, 234, 0)),
+        linear-gradient(135deg, #8a263b 0%, #702234 34%, #4a2a1d 76%, #2d1810 100%);
+      box-shadow:
+        0 22px 52px rgba(122, 38, 55, 0.34),
+        inset 0 1px 0 rgba(255, 248, 234, 0.24);
+      border: 1px solid rgba(215, 169, 74, 0.42);
+    }
+
+    .phone:not(.map) .row,
+    .phone:not(.map) .categoryList,
+    .phone:not(.map) .catRow,
+    .phone:not(.map) .formCard {
+      background: #fff8ea;
+      color: #24170f;
+      border-color: rgba(74, 42, 29, 0.14);
+    }
+
+    .phone:not(.map) .row .rowSub,
+    .phone:not(.map) .fieldHint,
+    .phone:not(.map) .fieldLine label,
+    .phone:not(.map) .quick span {
+      color: #755f52;
+    }
+
+    .phone:not(.map) .quick {
+      background: #fff8ea;
+      color: #24170f;
+      box-shadow: 0 18px 34px rgba(6, 3, 1, 0.18);
+    }
+
+    .phone:not(.map) .bottomNav {
+      background: rgba(255, 248, 234, 0.97);
+      border: 1px solid rgba(215, 169, 74, 0.2);
+      box-shadow:
+        0 22px 54px rgba(5, 2, 1, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    }
+
+    .phone:not(.map) .navItem {
+      color: #82766c;
+    }
+
+    .phone:not(.map) .navItem.active {
+      color: #24170f;
+    }
+
+    .phone.menu .search {
+      background: rgba(255, 248, 234, 0.16);
+      color: rgba(255, 248, 234, 0.68);
+      border: 1px solid rgba(215, 169, 74, 0.2);
+      box-shadow: inset 0 1px 0 rgba(255, 248, 234, 0.08);
+    }
+
+    .phone.menu .promoVisual {
+      background:
+        radial-gradient(circle at 20% 20%, rgba(215, 169, 74, 0.28), transparent 24%),
+        linear-gradient(135deg, #fff8ea 0%, #f2e4c8 44%, #d9bf91 100%);
+    }
+
+    .phone.menu .promoCaption {
+      background: rgba(255, 248, 234, 0.95);
+    }
+
+    .phone.menu .categoryList {
+      border-top: 1px solid rgba(215, 169, 74, 0.18);
+    }
+
+    .phone.cream .guestCard {
+      background:
+        radial-gradient(circle at 78% 88%, rgba(215, 169, 74, 0.22), transparent 30%),
+        linear-gradient(135deg, #2d1810 0%, #4a2a1d 50%, #7a2637 100%);
+      border: 1px solid rgba(215, 169, 74, 0.28);
+      box-shadow: 0 24px 64px rgba(8, 3, 1, 0.34);
+    }
+
+    .phone.cream .softPanel {
+      background: #f2e4c8;
+      color: #24170f;
+    }
+
+    .phone.cream .backCircle {
+      background: #fff8ea;
+      color: #24170f;
+      border-color: rgba(215, 169, 74, 0.28);
+    }
+
+    .phone.cream .saveSticky .primary {
+      background:
+        linear-gradient(180deg, rgba(255, 248, 234, 0.14), rgba(255, 248, 234, 0)),
+        linear-gradient(135deg, #8a263b, #541926 72%, #36120f);
+    }
+
+    .phone.map .mapSheet,
+    .phone.map .floatingNav {
+      background: rgba(255, 248, 234, 0.97);
+      border: 1px solid rgba(74, 42, 29, 0.08);
+    }
+
+    .phone.map .routeButton {
+      background:
+        linear-gradient(180deg, rgba(255, 248, 234, 0.13), rgba(255, 248, 234, 0)),
+        linear-gradient(135deg, #8a263b, #4a2a1d 78%);
+      border: 1px solid rgba(215, 169, 74, 0.22);
+      box-shadow: 0 16px 34px rgba(122, 38, 55, 0.22);
+    }
+
+    /* Reference mockup direction: dark mountain lounge, cream plastic card, gold linework. */
+    body.board {
+      background: #120c08;
+    }
+
+    .phone {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+
+    .phone:not(.map),
+    .splashBg,
+    .phone.map {
+      background:
+        radial-gradient(circle at 83% 9%, rgba(235, 188, 94, 0.16), transparent 21%),
+        radial-gradient(circle at 18% 32%, rgba(255, 248, 234, 0.07), transparent 23%),
+        radial-gradient(circle at 68% 96%, rgba(215, 169, 74, 0.08), transparent 28%),
+        linear-gradient(145deg, #2a1a12 0%, #1f130e 45%, #120b08 100%);
+      color: #fff8ea;
+    }
+
+    .phone:not(.map)::before,
+    .splashBg::before,
+    .phone.map::before {
+      content: "";
+      position: absolute;
+      inset: -120px;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 80% 20%, rgba(215, 169, 74, 0.13), transparent 17%),
+        radial-gradient(circle at 26% 78%, rgba(255, 248, 234, 0.06), transparent 22%),
+        linear-gradient(35deg, transparent 0 48%, rgba(255, 248, 234, 0.018) 50%, transparent 54%);
+      filter: blur(8px);
+    }
+
+    .status {
+      top: 44px;
+      left: 62px;
+      right: 52px;
+      font-size: 39px;
+      font-weight: 590;
+      letter-spacing: 0;
+      color: #fff8ea;
+    }
+
+    .status.light,
+    .phone.map .status {
+      color: #fff8ea;
+    }
+
+    .statusIcons {
+      gap: 18px;
+      font-size: 0;
+    }
+
+    .statusIcons::before {
+      content: "";
+      order: 1;
+      width: 55px;
+      height: 33px;
+      background:
+        linear-gradient(to top, currentColor 0 34%, transparent 35%) 0 100% / 9px 25px no-repeat,
+        linear-gradient(to top, currentColor 0 50%, transparent 51%) 15px 100% / 9px 28px no-repeat,
+        linear-gradient(to top, currentColor 0 68%, transparent 69%) 30px 100% / 9px 31px no-repeat,
+        linear-gradient(to top, currentColor 0 86%, transparent 87%) 45px 100% / 9px 34px no-repeat;
+      border-radius: 5px;
+    }
+
+    .statusIcons::after {
+      content: "";
+      order: 2;
+      width: 47px;
+      height: 32px;
+      background:
+        radial-gradient(ellipse at 50% 100%, transparent 0 10px, currentColor 11px 15px, transparent 16px),
+        radial-gradient(ellipse at 50% 100%, transparent 0 19px, currentColor 20px 24px, transparent 25px),
+        radial-gradient(circle at 50% 92%, currentColor 0 4px, transparent 5px);
+    }
+
+    .battery {
+      order: 3;
+      min-width: 66px;
+      height: 34px;
+      border-radius: 10px;
+      background: rgba(215, 169, 74, 0.27);
+      color: #e7b765;
+      font-size: 27px;
+      font-weight: 720;
+    }
+
+    .content {
+      z-index: 2;
+      padding: 182px 52px 302px;
+    }
+
+    .content.narrow {
+      padding-left: 56px;
+      padding-right: 56px;
+    }
+
+    .content.form {
+      padding-top: 164px;
+    }
+
+    h1,
+    .formTitle,
+    .sheetTitle,
+    .profileName,
+    .quick strong,
+    .rowText,
+    .splashLogo .word {
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    h1,
+    .phone:not(.map) h1,
+    .phone:not(.map) .formTitle {
+      color: #fff8ea;
+      font-size: 97px;
+      line-height: 0.96;
+      letter-spacing: -1.5px;
+      text-shadow: 0 10px 34px rgba(0, 0, 0, 0.18);
+    }
+
+    .profileName {
+      margin-top: 28px;
+      color: rgba(255, 248, 234, 0.7);
+      font-size: 37px;
+      line-height: 1.1;
+    }
+
+    .subtitle {
+      margin: 84px 0 40px;
+      color: rgba(255, 248, 234, 0.67);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 34px;
+      line-height: 1.34;
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 500;
+    }
+
+    .topLogo,
+    .phone:not(.map) .topLogo,
+    .mapPin {
+      top: 130px;
+      right: 52px;
+      width: 184px;
+      height: 184px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 50% 38%, rgba(255, 248, 234, 0.08), transparent 42%),
+        rgba(55, 35, 23, 0.66);
+      border: 2px solid #d7a94a;
+      color: #ffe0a0;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 45px;
+      font-weight: 500;
+      line-height: 0.88;
+      box-shadow:
+        0 0 34px rgba(215, 169, 74, 0.25),
+        inset 0 0 28px rgba(215, 169, 74, 0.08);
+    }
+
+    .topLogo::before,
+    .mapPin::before {
+      content: "";
+      width: 102px;
+      height: 42px;
+      margin-bottom: -5px;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 122 42'%3E%3Cpath d='M3 31c25 1 42-5 55-28 9 25 26 30 47 22 8-3 12-3 14 2' fill='none' stroke='%23d7a94a' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+    }
+
+    .topLogo small {
+      color: rgba(255, 224, 160, 0.78);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 22px;
+      letter-spacing: 1px;
+      font-weight: 400;
+    }
+
+    .primary,
+    .phone:not(.map) .primary {
+      height: 116px;
+      border-radius: 30px;
+      background:
+        linear-gradient(180deg, rgba(255, 248, 234, 0.12), rgba(255, 248, 234, 0.02)),
+        rgba(255, 248, 234, 0.12);
+      border: 1px solid rgba(215, 169, 74, 0.38);
+      color: #fff8ea;
+      box-shadow: inset 0 1px 0 rgba(255, 248, 234, 0.18), 0 20px 54px rgba(5, 2, 1, 0.26);
+    }
+
+    .guestCard,
+    .phone.cream .guestCard {
+      margin-top: 46px;
+      height: 506px;
+      border-radius: 31px;
+      padding: 70px 52px 62px;
+      color: #2d1d14;
+      background:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='680' height='330' viewBox='0 0 680 330'%3E%3Cg fill='none' stroke='%23755f52' stroke-opacity='.42' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M35 268 132 192l52 46 84-130 82 138 70-96 58 80 54-57 112 96' stroke-width='5'/%3E%3Cpath d='M109 247c64-30 111-34 160-18 58 19 117 8 177-34 48-34 93-40 166 1' stroke-width='3'/%3E%3Cpath d='M184 238 269 108l-16 112 97 26-68-101' stroke-width='3'/%3E%3Cpath d='M350 246l70-96-8 72 66 8-42-56' stroke-width='3'/%3E%3Cpath d='M32 289c90-31 153-35 229-14 88 25 169 11 250-26 48-22 88-22 134 8' stroke-width='3'/%3E%3Cpath d='M245 278c50-23 91-25 136-11 47 14 89 13 138-12' stroke-width='2'/%3E%3Cpath d='M426 255c52 8 98 23 163 19' stroke-width='2'/%3E%3C/g%3E%3C/svg%3E")
+          right -26px bottom -4px / 630px 305px no-repeat,
+        radial-gradient(circle at 88% 18%, rgba(215, 169, 74, 0.14), transparent 20%),
+        linear-gradient(135deg, #fff8ea 0%, #f5ead7 50%, #efe0c8 100%);
+      border: 1px solid rgba(255, 248, 234, 0.7);
+      box-shadow:
+        0 28px 70px rgba(5, 2, 1, 0.34),
+        inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    }
+
+    .guestCard::after {
+      display: none;
+    }
+
+    .brandLine {
+      right: 54px;
+      top: 54px;
+      width: 214px;
+      height: 122px;
+      opacity: 0.98;
+    }
+
+    .brandLine path {
+      stroke: #a77a32;
+    }
+
+    .brandLine text {
+      fill: #a77a32;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+    }
+
+    .cardKicker {
+      color: #a77a32;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 31px;
+      font-weight: 500;
+      letter-spacing: 9px;
+    }
+
+    .cardBalance {
+      margin-top: 58px;
+      color: #2d1d14;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 116px;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .cardBalance span {
+      margin-top: 16px;
+      color: rgba(45, 29, 20, 0.7);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 34px;
+      font-weight: 500;
+    }
+
+    .cardBalance::after {
+      content: "";
+      display: block;
+      width: 53px;
+      height: 2px;
+      margin-top: 48px;
+      background: #b88539;
+    }
+
+    .cardNumber {
+      left: 52px;
+      bottom: 62px;
+      color: #a77a32;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 32px;
+      font-weight: 600;
+      letter-spacing: 10px;
+    }
+
+    .quickGrid {
+      margin-top: 38px;
+      gap: 20px;
+    }
+
+    .quick,
+    .phone:not(.map) .quick {
+      position: relative;
+      min-height: 278px;
+      border-radius: 29px;
+      background:
+        linear-gradient(180deg, rgba(255, 248, 234, 0.12), rgba(255, 248, 234, 0.06)),
+        rgba(255, 248, 234, 0.08);
+      border: 1px solid rgba(255, 224, 160, 0.44);
+      color: #fff8ea;
+      padding: 132px 34px 34px;
+      box-shadow: inset 0 1px 0 rgba(255, 248, 234, 0.12), 0 20px 50px rgba(5, 2, 1, 0.18);
+    }
+
+    .quick::before {
+      content: "";
+      position: absolute;
+      left: 33px;
+      top: 37px;
+      width: 86px;
+      height: 86px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 224, 160, 0.72);
+      background:
+        radial-gradient(circle at 50% 42%, transparent 0 14px, #f3c477 15px 17px, transparent 18px),
+        radial-gradient(circle at 50% 70%, transparent 0 26px, #f3c477 27px 29px, transparent 30px),
+        rgba(255, 248, 234, 0.06);
+      box-shadow: 0 0 0 1px rgba(255, 248, 234, 0.08), inset 0 0 20px rgba(215, 169, 74, 0.12);
+    }
+
+    .quick:nth-child(2)::before {
+      background:
+        radial-gradient(circle at 50% 50%, transparent 0 29px, #f3c477 30px 32px, transparent 33px),
+        linear-gradient(#f3c477, #f3c477) 50% 29px / 3px 24px no-repeat,
+        linear-gradient(#f3c477, #f3c477) 50% 50% / 20px 3px no-repeat,
+        rgba(255, 248, 234, 0.06);
+    }
+
+    .quick:nth-child(3)::before {
+      background:
+        linear-gradient(#f3c477, #f3c477) 28px 25px / 11px 11px no-repeat,
+        linear-gradient(#f3c477, #f3c477) 48px 25px / 11px 11px no-repeat,
+        linear-gradient(#f3c477, #f3c477) 28px 46px / 11px 11px no-repeat,
+        linear-gradient(#f3c477, #f3c477) 48px 46px / 11px 11px no-repeat,
+        rgba(255, 248, 234, 0.06);
+    }
+
+    .quick::after {
+      content: "›";
+      position: absolute;
+      right: 24px;
+      bottom: 62px;
+      color: rgba(255, 248, 234, 0.85);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 56px;
+      line-height: 1;
+    }
+
+    .quick strong {
+      color: #fff8ea;
+      font-size: 33px;
+      line-height: 1.08;
+    }
+
+    .quick span,
+    .phone:not(.map) .quick span {
+      color: rgba(255, 248, 234, 0.7);
+      font-size: 25px;
+      font-weight: 400;
+    }
+
+    .sectionLabel,
+    .phone:not(.map) .sectionLabel {
+      color: #e4b869;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 28px;
+      font-weight: 500;
+      letter-spacing: 10px;
+    }
+
+    .sectionLabel.tight {
+      margin-top: 70px;
+      margin-bottom: 28px;
+    }
+
+    .row,
+    .phone:not(.map) .row,
+    .phone:not(.map) .formCard,
+    .phone:not(.map) .categoryList,
+    .phone:not(.map) .catRow {
+      background:
+        linear-gradient(180deg, rgba(255, 248, 234, 0.12), rgba(255, 248, 234, 0.07)),
+        rgba(255, 248, 234, 0.08);
+      color: #fff8ea;
+      border-color: rgba(255, 224, 160, 0.22);
+      box-shadow: inset 0 1px 0 rgba(255, 248, 234, 0.08);
+    }
+
+    .row {
+      min-height: 154px;
+      padding: 0 34px;
+      gap: 34px;
+      font-size: 34px;
+      border-left: 1px solid rgba(255, 224, 160, 0.22);
+      border-right: 1px solid rgba(255, 224, 160, 0.22);
+    }
+
+    .phone.cream .sectionLabel.tight + .row,
+    .phone:not(.cream) .sectionLabel + .row {
+      border-top-left-radius: 28px;
+      border-top-right-radius: 28px;
+    }
+
+    .phone.cream .sectionLabel.tight + .row + .row,
+    .phone:not(.cream) .sectionLabel + .row + .row + .row,
+    .phone:not(.cream) .sectionLabel.tight + .row {
+      border-bottom-left-radius: 28px;
+      border-bottom-right-radius: 28px;
+      border-bottom: 1px solid rgba(255, 224, 160, 0.22);
+    }
+
+    .row .rowSub,
+    .phone:not(.map) .row .rowSub {
+      color: rgba(255, 248, 234, 0.68);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      font-size: 24px;
+      font-weight: 400;
+    }
+
+    .iconBox {
+      width: 94px;
+      height: 94px;
+      min-width: 94px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #e7c17d, #b98540);
+      color: #fff8ea;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34);
+    }
+
+    .iconSvg {
+      width: 48px;
+      height: 48px;
+      stroke-width: 3.6;
+    }
+
+    .arrow {
+      color: rgba(255, 248, 234, 0.76);
+      font-size: 55px;
+    }
+
+    .bottomNav,
+    .phone:not(.map) .bottomNav,
+    .floatingNav,
+    .phone.map .floatingNav {
+      left: 52px;
+      right: 52px;
+      bottom: 76px;
+      height: 211px;
+      border-radius: 45px;
+      background:
+        radial-gradient(circle at 12% 18%, rgba(215, 169, 74, 0.15), transparent 20%),
+        linear-gradient(135deg, #fff8ea, #f4e6d0);
+      border: 1px solid rgba(255, 248, 234, 0.85);
+      padding-top: 31px;
+      box-shadow:
+        0 24px 62px rgba(5, 2, 1, 0.42),
+        inset 0 1px 0 rgba(255, 255, 255, 0.78);
+    }
+
+    .navItem {
+      position: relative;
+      gap: 15px;
+      color: rgba(45, 29, 20, 0.48);
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 31px;
+      font-weight: 500;
+    }
+
+    .phone:not(.map) .navItem,
+    .phone.map .navItem {
+      color: rgba(45, 29, 20, 0.48);
+    }
+
+    .navItem svg {
+      position: relative;
+      z-index: 1;
+      width: 66px;
+      height: 66px;
+      stroke-width: 3.7;
+    }
+
+    .navItem.active,
+    .phone:not(.map) .navItem.active,
+    .phone.map .navItem.active {
+      color: #2d1d14;
+    }
+
+    .navItem.active::before {
+      content: "";
+      position: absolute;
+      top: -8px;
+      width: 82px;
+      height: 82px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 42% 36%, rgba(215, 169, 74, 0.25), transparent 38%),
+        #3a2417;
+      box-shadow: 0 12px 28px rgba(58, 36, 23, 0.28);
+    }
+
+    .navItem.active svg {
+      color: #f3c477;
+    }
+
+    .search,
+    .phone.menu .search {
+      margin-top: 52px;
+      height: 94px;
+      border-radius: 30px;
+      background: rgba(255, 248, 234, 0.1);
+      border: 1px solid rgba(255, 224, 160, 0.24);
+      color: rgba(255, 248, 234, 0.66);
+    }
+
+    .promo {
+      border-radius: 30px;
+      border: 1px solid rgba(255, 224, 160, 0.24);
+      box-shadow: 0 24px 58px rgba(5, 2, 1, 0.24);
+    }
+
+    .promoVisual,
+    .phone.menu .promoVisual {
+      background:
+        radial-gradient(circle at 20% 26%, rgba(122, 38, 55, 0.12), transparent 18%),
+        radial-gradient(circle at 70% 74%, rgba(215, 169, 74, 0.23), transparent 22%),
+        linear-gradient(135deg, #fff8ea, #ead8ba);
+    }
+
+    .promoCaption,
+    .phone.menu .promoCaption {
+      background: rgba(255, 248, 234, 0.92);
+      color: #2d1d14;
+      padding-left: 26px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+    }
+
+    .promoText {
+      color: #8e5f22;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+      letter-spacing: 1px;
+    }
+
+    .categoryList {
+      margin-top: 26px;
+      border-radius: 30px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 224, 160, 0.22);
+    }
+
+    .catRow {
+      color: #fff8ea;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+    }
+
+    .formTop {
+      margin-bottom: 44px;
+    }
+
+    .backCircle,
+    .phone.cream .backCircle {
+      width: 78px;
+      height: 78px;
+      border-radius: 50%;
+      background: rgba(255, 248, 234, 0.1);
+      border-color: rgba(255, 224, 160, 0.28);
+      color: #fff8ea;
+      box-shadow: inset 0 1px 0 rgba(255, 248, 234, 0.1);
+    }
+
+    .formCard,
+    .phone:not(.map) .formCard {
+      border-radius: 30px;
+      border: 1px solid rgba(255, 224, 160, 0.22);
+      color: #fff8ea;
+    }
+
+    .fieldLine label,
+    .phone:not(.map) .fieldLine label {
+      color: #e4b869;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+      letter-spacing: 5px;
+    }
+
+    .fieldHint,
+    .phone:not(.map) .fieldHint {
+      color: rgba(255, 248, 234, 0.68);
+    }
+
+    .softPanel,
+    .phone.cream .softPanel {
+      background: rgba(255, 248, 234, 0.1);
+      border: 1px solid rgba(255, 224, 160, 0.22);
+      color: #fff8ea;
+    }
+
+    .softPanel span {
+      color: rgba(255, 248, 234, 0.68);
+    }
+
+    .saveSticky {
+      bottom: 318px;
+    }
+
+    .phone.cream .saveSticky .primary {
+      background:
+        linear-gradient(180deg, rgba(255, 248, 234, 0.16), rgba(255, 248, 234, 0.04)),
+        rgba(255, 248, 234, 0.1);
+    }
+
+    .splashLogo {
+      color: #ffe0a0;
+    }
+
+    .splashLogo .word {
+      font-size: 148px;
+      font-weight: 500;
+      letter-spacing: -2px;
+    }
+
+    .splashLogo .tag {
+      color: rgba(255, 248, 234, 0.7);
+      font-family: Georgia, "Times New Roman", serif;
+      letter-spacing: 10px;
+      font-weight: 500;
+    }
+
+    .mapCanvas {
+      background:
+        linear-gradient(32deg, transparent 0 39%, rgba(215, 169, 74, 0.22) 40% 44%, transparent 45%),
+        linear-gradient(118deg, transparent 0 41%, rgba(255, 248, 234, 0.13) 42% 44%, transparent 45%),
+        linear-gradient(64deg, transparent 0 49%, rgba(255, 248, 234, 0.12) 50% 52%, transparent 53%),
+        #1f130e;
+    }
+
+    .mapCanvas::before {
+      background:
+        repeating-linear-gradient(18deg, transparent 0 116px, rgba(255, 248, 234, 0.07) 118px 124px, transparent 126px 230px),
+        repeating-linear-gradient(93deg, transparent 0 142px, rgba(215, 169, 74, 0.08) 144px 150px, transparent 151px 282px);
+      opacity: 1;
+    }
+
+    .mapBlock {
+      background: rgba(255, 248, 234, 0.09);
+      border: 1px solid rgba(255, 224, 160, 0.12);
+    }
+
+    .mapLabel,
+    .mapLabel.pink,
+    .mapLabel.street {
+      color: rgba(255, 248, 234, 0.43);
+      text-shadow: none;
+    }
+
+    .mapPin {
+      left: 389px;
+      top: 680px;
+      width: 168px;
+      height: 168px;
+      border-radius: 50%;
+      font-size: 40px;
+      box-shadow:
+        0 0 0 16px rgba(255, 248, 234, 0.92),
+        0 0 36px rgba(215, 169, 74, 0.28),
+        0 18px 42px rgba(5, 2, 1, 0.36);
+    }
+
+    .mapPin small {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 20px;
+      letter-spacing: 1px;
+      font-weight: 400;
+    }
+
+    .locateButton {
+      background: rgba(255, 248, 234, 0.95);
+      color: #2d1d14;
+      box-shadow: 0 16px 36px rgba(5, 2, 1, 0.28);
+    }
+
+    .mapSheet,
+    .phone.map .mapSheet {
+      bottom: 310px;
+      min-height: 470px;
+      border-radius: 38px;
+      background:
+        linear-gradient(180deg, rgba(255, 248, 234, 0.15), rgba(255, 248, 234, 0.08)),
+        rgba(255, 248, 234, 0.08);
+      border: 1px solid rgba(255, 224, 160, 0.28);
+      color: #fff8ea;
+      box-shadow: 0 30px 74px rgba(5, 2, 1, 0.42);
+    }
+
+    .sheetTitle {
+      color: #fff8ea;
+      font-size: 58px;
+      font-weight: 500;
+    }
+
+    .infoRow,
+    .infoRow .right {
+      color: rgba(255, 248, 234, 0.82);
+    }
+
+    .routeButton,
+    .phone.map .routeButton {
+      background: linear-gradient(135deg, #fff8ea, #e7c17d);
+      border: 0;
+      color: #2d1d14;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute;overflow:hidden">
+    <symbol id="icon-profile" viewBox="0 0 64 64"><circle cx="32" cy="21" r="13"></circle><path d="M12 56c4-14 14-21 20-21s16 7 20 21"></path></symbol>
+    <symbol id="icon-menu" viewBox="0 0 64 64"><path d="M13 35c2-13 10-21 19-21s17 8 19 21"></path><path d="M8 36h48"></path><path d="M18 44h28"></path><path d="M32 10v4"></path></symbol>
+    <symbol id="icon-map" viewBox="0 0 64 64"><path d="M14 28h36v27H14z"></path><path d="M10 28l7-13h30l7 13"></path><path d="M24 55V42h16v13"></path><path d="M21 35h8m7 0h8"></path></symbol>
+    <symbol id="icon-card" viewBox="0 0 64 64"><rect x="10" y="16" width="44" height="32" rx="5"></rect><path d="M10 27h44"></path><path d="M18 39h14"></path></symbol>
+    <symbol id="icon-lock" viewBox="0 0 64 64"><rect x="14" y="28" width="36" height="25" rx="5"></rect><path d="M23 28v-8a9 9 0 0 1 18 0v8"></path></symbol>
+    <symbol id="icon-bell" viewBox="0 0 64 64"><path d="M18 44h28l-4-6V27c0-7-4-12-10-12S22 20 22 27v11z"></path><path d="M28 51h8"></path></symbol>
+    <symbol id="icon-mail" viewBox="0 0 64 64"><rect x="8" y="15" width="48" height="34" rx="5"></rect><path d="M9 20l23 18 23-18"></path></symbol>
+    <symbol id="icon-userdata" viewBox="0 0 64 64"><circle cx="25" cy="22" r="9"></circle><path d="M10 51c3-11 10-17 15-17s12 6 15 17"></path><path d="M44 18h10m-10 11h10m-8 11h8"></path></symbol>
+    <symbol id="icon-phone" viewBox="0 0 64 64"><path d="M20 10l8 11-6 6c5 9 10 14 19 19l6-6 11 8c-2 8-7 12-14 10-18-6-32-20-38-38-2-7 2-12 10-14z"></path></symbol>
+    <symbol id="icon-clock" viewBox="0 0 64 64"><circle cx="32" cy="32" r="22"></circle><path d="M32 18v16l10 6"></path></symbol>
+    <symbol id="icon-location" viewBox="0 0 64 64"><circle cx="32" cy="32" r="20"></circle><path d="M32 8v10m0 28v10M8 32h10m28 0h10"></path></symbol>
+  </svg>
+
+  <div class="phone hidden splashBg" data-screen="splash">
+    <div class="status light"><span>19:57</span><span class="statusIcons">▮▮▮ ))) <span class="battery">24</span></span></div>
+    <div class="splashLogo">
+      <svg class="mountain" viewBox="0 0 520 92"><path d="M14 72c83 2 133-12 166-64 12 54 71 57 142 41 42-10 57-12 61 20 36 1 75-3 123 8" fill="none" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <div class="word">Горы</div>
+      <div class="tag">грузинская кухня</div>
+    </div>
+    <div class="homeIndicator light"></div>
+  </div>
+
+  <div class="phone hidden" data-screen="profile-entry">
+    <div class="status"><span>19:57</span><span class="statusIcons">▮▮▮ ))) <span class="battery">24</span></span></div>
+    <main class="content narrow">
+      <div class="topLogo">Горы<small>rest</small></div>
+      <h1>Профиль</h1>
+      <div class="subtitle">Для бонусной карты, истории визитов и личных предложений нужно войти</div>
+      <div class="primary">Вход</div>
+
+      <div class="sectionLabel">Информация</div>
+      <div class="row">
+        <span class="iconBox"><svg class="iconSvg"><use href="#icon-userdata"></use></svg></span>
+        <span class="rowText">Мои данные<span class="rowSub">Имя, телефон, день рождения</span></span>
+        <span class="arrow">›</span>
+      </div>
+      <div class="row">
+        <span class="iconBox"><svg class="iconSvg"><use href="#icon-card"></use></svg></span>
+        <span class="rowText">Бонусная карта<span class="rowSub">Начисления и уровень гостя</span></span>
+        <span class="arrow">›</span>
+      </div>
+      <div class="row">
+        <span class="iconBox"><svg class="iconSvg"><use href="#icon-lock"></use></svg></span>
+        <span class="rowText">Для сотрудников<span class="rowSub">Вход официанта, кухни, администратора</span></span>
+        <span class="arrow">›</span>
+      </div>
+
+      <div class="sectionLabel tight">Поддержка</div>
+      <div class="row">
+        <span class="iconBox"><svg class="iconSvg"><use href="#icon-mail"></use></svg></span>
+        <span class="rowText">Сообщить об ошибке</span>
+        <span class="arrow">›</span>
+      </div>
+    </main>
+    <nav class="bottomNav">
+      <div class="navItem active"><svg><use href="#icon-profile"></use></svg><span>Профиль</span></div>
+      <div class="navItem"><svg><use href="#icon-menu"></use></svg><span>Меню</span></div>
+      <div class="navItem"><svg><use href="#icon-map"></use></svg><span>Карта</span></div>
+    </nav>
+  </div>
+
+  <div class="phone hidden cream" data-screen="profile-card">
+    <div class="status"><span>19:57</span><span class="statusIcons">▮▮▮ ))) <span class="battery">24</span></span></div>
+    <main class="content narrow">
+      <div class="topLogo">Горы<small>rest</small></div>
+      <h1>Профиль</h1>
+      <div class="profileName">Алексей, добро пожаловать</div>
+      <section class="guestCard">
+        <svg class="brandLine" viewBox="0 0 220 90"><path d="M8 64c39 1 64-6 80-48 12 39 38 42 73 31 24-8 34-8 37 17" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"></path><text x="20" y="88" fill="#fff" font-size="34" font-weight="900">Горы</text></svg>
+        <div class="cardKicker">Бонусная карта</div>
+        <div class="cardBalance">300<span>бонусов доступно</span></div>
+        <div class="cardNumber">GOR-01482</div>
+      </section>
+      <div class="quickGrid">
+        <div class="quick"><strong>Мои данные</strong><span>Заполнить</span></div>
+        <div class="quick"><strong>История</strong><span>Визиты</span></div>
+        <div class="quick"><strong>Код</strong><span>Для стола</span></div>
+      </div>
+
+      <div class="sectionLabel tight">Аккаунт</div>
+      <div class="row">
+        <span class="iconBox"><svg class="iconSvg"><use href="#icon-bell"></use></svg></span>
+        <span class="rowText">Уведомления<span class="rowSub">Акции, банкеты, важные сообщения</span></span>
+        <span class="arrow">›</span>
+      </div>
+      <div class="row">
+        <span class="iconBox"><svg class="iconSvg"><use href="#icon-lock"></use></svg></span>
+        <span class="rowText">Для сотрудников<span class="rowSub">Рабочий вход остаётся здесь</span></span>
+        <span class="arrow">›</span>
+      </div>
+    </main>
+    <nav class="bottomNav">
+      <div class="navItem active"><svg><use href="#icon-profile"></use></svg><span>Профиль</span></div>
+      <div class="navItem"><svg><use href="#icon-menu"></use></svg><span>Меню</span></div>
+      <div class="navItem"><svg><use href="#icon-map"></use></svg><span>Карта</span></div>
+    </nav>
+  </div>
+
+  <div class="phone hidden menu" data-screen="menu">
+    <div class="status"><span>19:57</span><span class="statusIcons">▮▮▮ ))) <span class="battery">24</span></span></div>
+    <main class="content">
+      <div class="topLogo">Горы<small>rest</small></div>
+      <h1>Меню</h1>
+      <div class="search">
+        <svg class="iconSvg" style="width:48px;height:48px;color:#7c7976"><circle cx="26" cy="26" r="17"></circle><path d="M39 39l12 12"></path></svg>
+        <span>Поиск</span>
+      </div>
+      <section class="promoStrip">
+        <article class="promo">
+          <div class="promoVisual">
+            <div class="food one"></div><div class="food two"></div><div class="food three"></div><div class="food four"></div>
+            <div class="herbs a"></div><div class="herbs b"></div><div class="herbs c"></div>
+            <div class="promoText">Новые обеды в Горах</div>
+          </div>
+          <div class="promoCaption">Обновлённые обеды в Горах</div>
+        </article>
+        <article class="promo" style="flex-basis:420px; filter: brightness(0.85);">
+          <div class="promoVisual" style="background:#2c211c;"><div class="promoText" style="left:38px;right:auto;color:#fff;width:310px;">Мангал каждый день</div></div>
+        </article>
+      </section>
+      <section class="categoryList">
+        <div class="catRow"><div class="catThumb"></div><div>Хинкали</div><span class="arrow">›</span></div>
+        <div class="catRow"><div class="catThumb gold"></div><div>Хачапури</div><span class="arrow">›</span></div>
+        <div class="catRow"><div class="catThumb pink"></div><div>Мангал</div><span class="arrow">›</span></div>
+        <div class="catRow"><div class="catThumb green"></div><div>Салаты и закуски</div><span class="arrow">›</span></div>
+      </section>
+    </main>
+    <nav class="bottomNav">
+      <div class="navItem"><svg><use href="#icon-profile"></use></svg><span>Профиль</span></div>
+      <div class="navItem active"><svg><use href="#icon-menu"></use></svg><span>Меню</span></div>
+      <div class="navItem"><svg><use href="#icon-map"></use></svg><span>Карта</span></div>
+    </nav>
+  </div>
+
+  <div class="phone hidden map" data-screen="map">
+    <div class="mapCanvas">
+      <div class="mapBlock" style="left:72px;top:150px;"></div>
+      <div class="mapBlock" style="right:76px;top:290px;width:260px;height:230px;"></div>
+      <div class="mapBlock" style="left:250px;top:570px;width:310px;height:230px;"></div>
+      <div class="mapBlock" style="right:84px;top:845px;width:250px;height:200px;"></div>
+      <div class="mapBlock" style="left:90px;top:1060px;width:250px;height:180px;"></div>
+      <div class="mapLabel pink" style="left:92px;top:236px;">Студия<br>красоты</div>
+      <div class="mapLabel" style="right:86px;top:370px;">Торговый<br>центр</div>
+      <div class="mapLabel pink" style="left:292px;top:606px;">Центр<br>Иваново</div>
+      <div class="mapLabel street" style="left:50px;top:940px;">Советская улица</div>
+      <div class="mapLabel street" style="right:40px;top:1020px;transform:rotate(48deg);">улица 10 Августа</div>
+    </div>
+    <div class="status"><span>19:58</span><span class="statusIcons">▮▮▮ ))) <span class="battery">24</span></span></div>
+    <div class="locateButton"><svg class="iconSvg"><use href="#icon-location"></use></svg></div>
+    <div class="mapPin">Горы<small>rest</small></div>
+    <section class="mapSheet">
+      <div class="handle"></div>
+      <h2 class="sheetTitle">Горы</h2>
+      <div class="infoRow"><svg class="iconSvg"><use href="#icon-clock"></use></svg><span>Часы работы</span><span class="right">12:00-00:00</span></div>
+      <div class="infoRow"><svg class="iconSvg"><use href="#icon-phone"></use></svg><span>Телефон</span><span class="right">+7 900 100-10-00</span></div>
+      <div class="infoRow"><svg class="iconSvg"><use href="#icon-map"></use></svg><span>Советская 36а</span><span></span></div>
+      <div class="routeButton">Построить маршрут</div>
+    </section>
+    <nav class="floatingNav">
+      <div class="navItem"><svg><use href="#icon-profile"></use></svg><span>Профиль</span></div>
+      <div class="navItem"><svg><use href="#icon-menu"></use></svg><span>Меню</span></div>
+      <div class="navItem active"><svg><use href="#icon-map"></use></svg><span>Карта</span></div>
+    </nav>
+  </div>
+
+  <div class="phone hidden cream" data-screen="my-data">
+    <div class="status"><span>19:57</span><span class="statusIcons">▮▮▮ ))) <span class="battery">24</span></span></div>
+    <main class="content narrow form">
+      <div class="formTop">
+        <div class="backCircle">‹</div>
+        <div class="formTitle">Мои данные</div>
+      </div>
+      <section class="formCard">
+        <div class="fieldLine"><label>Имя</label><div>Алексей</div></div>
+        <div class="fieldLine"><label>Телефон</label><div>+7 900 100-10-00</div></div>
+        <div class="fieldLine"><label>День рождения</label><div>Не указан</div></div>
+        <div class="fieldLine"><label>Любимые блюда</label><div class="fieldHint">Хинкали, хачапури, мангал</div></div>
+      </section>
+      <div class="softPanel">
+        <span class="iconBox"><svg class="iconSvg"><use href="#icon-bell"></use></svg></span>
+        <div><strong>Личные предложения</strong><span>Можно включить акции, дни рождения и новости ресторана.</span></div>
+      </div>
+      <div class="sectionLabel tight">Рабочий доступ</div>
+      <div class="row">
+        <span class="iconBox"><svg class="iconSvg"><use href="#icon-lock"></use></svg></span>
+        <span class="rowText">Для сотрудников<span class="rowSub">Отдельный вход персонала, не мешает гостю</span></span>
+        <span class="arrow">›</span>
+      </div>
+    </main>
+    <div class="saveSticky"><div class="primary burgundy">Сохранить</div></div>
+    <nav class="bottomNav">
+      <div class="navItem active"><svg><use href="#icon-profile"></use></svg><span>Профиль</span></div>
+      <div class="navItem"><svg><use href="#icon-menu"></use></svg><span>Меню</span></div>
+      <div class="navItem"><svg><use href="#icon-map"></use></svg><span>Карта</span></div>
+    </nav>
+  </div>
+
+  <script>
+    const screen = new URLSearchParams(location.search).get('screen');
+    const screens = [...document.querySelectorAll('[data-screen]')];
+    if (screen) {
+      document.body.className = 'single';
+      screens.forEach((node) => node.classList.toggle('hidden', node.dataset.screen !== screen));
+    } else {
+      document.body.className = 'board';
+      const wrap = document.createElement('div');
+      wrap.className = 'boardWrap';
+      screens.forEach((node) => {
+        node.classList.remove('hidden');
+        wrap.appendChild(node);
+      });
+      document.body.appendChild(wrap);
+    }
+  </script>
+</body>
+</html>

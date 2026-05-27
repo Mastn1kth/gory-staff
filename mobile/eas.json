@@ -1,0 +1,25 @@
+﻿{
+    "cli":  {
+                "version":  "\u003e= 12.0.0",
+                "appVersionSource":  "local"
+            },
+    "build":  {
+                  "preview":  {
+                                  "distribution":  "internal",
+                                  "android":  {
+                                                  "buildType":  "apk"
+                                              },
+                                  "env":  {
+                                              "EXPO_PUBLIC_API_URL":  "https://app.gory-staff.ru"
+                                          }
+                              },
+                  "production":  {
+                                     "autoIncrement":  true
+                                 }
+              },
+    "submit":  {
+                   "production":  {
+
+                                  }
+               }
+}
