@@ -15,6 +15,7 @@ const {
   syncGuestOrderToIiko,
   syncOpenIikoOrderStatuses,
 } = require('./integrations/iiko');
+const { startGuestMarketingPushScheduler } = require('./guestMarketingPush');
 const {
   can,
   permissionsFor,
@@ -2216,6 +2217,16 @@ async function bootstrap() {
     });
     if (iikoOrderStatusScheduler.enabled) {
       console.log(`iiko order status sync runs every ${Math.round(iikoOrderStatusScheduler.intervalMs / 1000)} seconds.`);
+    }
+    const guestMarketingPushScheduler = startGuestMarketingPushScheduler({
+      pool,
+      createGuestNotification,
+      logActivity,
+      env: process.env,
+      logger: console,
+    });
+    if (guestMarketingPushScheduler.enabled) {
+      console.log(`guest marketing push runs every ${Math.round(guestMarketingPushScheduler.intervalMs / 1000)} seconds.`);
     }
     void sendUpcomingEventNotifications();
     if (pushReminderIntervalMs > 0) {
