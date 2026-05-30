@@ -47,6 +47,12 @@ export const assignableRoles: { role: RoleName; label: string; position: string 
 
 const barCategoryIds = new Set(['cat-13', 'cat-14', 'cat-15', 'cat-16', 'cat-17']);
 
+assignableRoles.splice(assignableRoles.length - 1, 0, {
+  role: 'smm_manager',
+  label: 'SMM',
+  position: 'SMM РјРµРЅРµРґР¶РµСЂ',
+});
+
 export const userStatusLabels: Partial<Record<User['status'], string>> = {
   on_shift: 'На смене',
   off_shift: 'Не на смене',

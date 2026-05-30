@@ -54,7 +54,7 @@ export default function App() {
   const [sectionHistory, setSectionHistory] = useState<SectionKey[]>([]);
   const [showSplash, setShowSplash] = useState(true);
   const [booting, setBooting] = useState(true);
-  const [guestInitialTab, setGuestInitialTab] = useState<'profile' | 'home' | 'menu' | 'route'>('home');
+  const [guestInitialTab, setGuestInitialTab] = useState<'news' | 'restaurant' | 'menu' | 'bonus' | 'profile'>('news');
   const [syncing, setSyncing] = useState(false);
   const [offline, setOffline] = useState(false);
   const [queueStatus, setQueueStatus] = useState<OfflineQueueStatus>(EMPTY_QUEUE_STATUS);

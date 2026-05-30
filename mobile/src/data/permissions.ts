@@ -31,7 +31,9 @@ export const sectionDefinitions: SectionDefinition[] = [
   { key: 'chat', label: 'Чат', shortLabel: 'Чат', icon: 'chatbubbles' },
 ];
 
-const preferredByRole: Record<RoleName, SectionKey[]> = {
+sectionDefinitions.push({ key: 'smm', label: 'SMM', shortLabel: 'SMM', icon: 'megaphone' });
+
+const preferredByRole: Partial<Record<RoleName, SectionKey[]>> = {
   pending: ['profile'],
   technician: ['admin', 'home', 'floor', 'staff', 'clients', 'analytics'],
   owner: ['analytics', 'clients', 'staff', 'schedule', 'home'],
@@ -44,6 +46,8 @@ const preferredByRole: Record<RoleName, SectionKey[]> = {
   bar: ['menu', 'stoplist', 'tasks', 'events', 'notifications', 'profile'],
   technical_staff: ['tasks', 'schedule', 'notifications', 'profile'],
 };
+
+preferredByRole.smm_manager = ['smm', 'notifications', 'profile'];
 
 export function initialSectionForRole(role: RoleName): SectionKey {
   return preferredByRole[role]?.[0] ?? 'home';
@@ -73,7 +77,8 @@ export function prioritySections(role: RoleName, allowed: SectionKey[]): Section
 }
 
 export function labelForRole(role: RoleName): string {
-  const labels: Record<RoleName, string> = {
+  if (role === 'smm_manager') return 'SMM РјРµРЅРµРґР¶РµСЂ';
+  const labels: Partial<Record<RoleName, string>> = {
     pending: 'Новый сотрудник',
     technician: 'Техник системы',
     owner: 'Владелец',
@@ -86,7 +91,7 @@ export function labelForRole(role: RoleName): string {
     bar: 'Бармен',
     technical_staff: 'Техперсонал',
   };
-  return labels[role];
+  return labels[role] ?? role;
 }
 
 export function canManage(snapshotPermissions: string[], permission: string): boolean {

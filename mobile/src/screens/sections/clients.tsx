@@ -14,7 +14,16 @@ import {
   SecondaryButton,
 } from '../../components/ui';
 import { palette } from '../../theme';
-import type { DataSnapshot, GuestBonusTransaction, GuestUser, User } from '../../types';
+import type {
+  DataSnapshot,
+  GuestBonusRedemption,
+  GuestBonusTransaction,
+  GuestOrder,
+  GuestUser,
+  IikoExternalOrder,
+  TableGuestSession,
+  User,
+} from '../../types';
 
 import type { MutationFn } from './types';
 
@@ -28,6 +37,15 @@ const guestBonusLabels: Record<string, string> = {
   correction: 'Корректировка',
   expired: 'Сгоревшие бонусы',
   spend: 'Списание',
+  iiko_bonus_redeem: 'Списание к iiko-заказу',
+  iiko_bonus_redeem_refund: 'Возврат iiko-списания',
+};
+
+const redemptionStatusLabels: Record<string, string> = {
+  reserved: 'Ожидает оплаты',
+  applied: 'Применено',
+  applied_adjusted: 'Применено с корректировкой',
+  cancelled: 'Отменено',
 };
 
 function roleTone(status?: string) {
@@ -62,6 +80,47 @@ function birthdayInNextDays(value?: string | null, days = 30) {
   return Math.ceil((next.getTime() - now.getTime()) / 86400000) <= days;
 }
 
+function numberFromInput(value: string) {
+  const normalized = value.replace(',', '.').replace(/[^\d.]/g, '');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function maxIikoBonusAmount(orderAmount: string) {
+  return Math.floor(numberFromInput(orderAmount) * 0.2);
+}
+
+function activeGuestSession(sessions: TableGuestSession[], guestId: string) {
+  return (
+    sessions.find((session) => session.guest_id === guestId && session.status === 'active') ??
+    sessions.find((session) => session.guest_id === guestId) ??
+    null
+  );
+}
+
+function openGuestOrder(orders: GuestOrder[], guestId: string, sessionId?: string | null) {
+  return (
+    orders.find(
+      (order) =>
+        order.guest_id === guestId &&
+        order.status !== 'closed' &&
+        order.status !== 'cancelled' &&
+        (!sessionId || order.table_session_id === sessionId),
+    ) ??
+    orders.find((order) => order.guest_id === guestId && order.status !== 'closed' && order.status !== 'cancelled') ??
+    null
+  );
+}
+
+function openIikoExternalOrder(orders: IikoExternalOrder[], guestId: string, sessionId?: string | null) {
+  const isOpen = (order: IikoExternalOrder) => !['closed', 'paid', 'completed', 'complete', 'cancelled', 'canceled'].includes(String(order.status).toLowerCase());
+  return (
+    orders.find((order) => order.guest_id === guestId && isOpen(order) && (!sessionId || order.table_session_id === sessionId)) ??
+    orders.find((order) => order.guest_id === guestId && isOpen(order)) ??
+    null
+  );
+}
+
 function MiniRow({ title, text }: { title: string; text: string }) {
   return (
     <View style={styles.miniRow}>
@@ -88,6 +147,22 @@ function GuestBonusRow({ transaction, client }: { transaction: GuestBonusTransac
   );
 }
 
+function GuestBonusRedemptionRow({ redemption }: { redemption: GuestBonusRedemption }) {
+  const status = redemptionStatusLabels[redemption.status] ?? redemption.status;
+  const orderText = redemption.iiko_order_id ? `iiko ${redemption.iiko_order_id}` : redemption.local_order_id ? `локальный ${redemption.local_order_id}` : 'заказ не указан';
+  return (
+    <View style={styles.miniRow}>
+      <View style={styles.flex}>
+        <Text style={styles.miniTitle}>{status}</Text>
+        <Text style={styles.miniText}>
+          {orderText} · заказ {redemption.order_amount ?? 0} ₽ · лимит {redemption.max_bonus_amount ?? 0}
+        </Text>
+      </View>
+      <Pill label={`-${redemption.amount}`} tone={redemption.status === 'cancelled' ? 'neutral' : 'bad'} />
+    </View>
+  );
+}
+
 export function ClientsScreen({
   snapshot,
   currentUser,
@@ -99,8 +174,10 @@ export function ClientsScreen({
 }) {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<GuestUser | null>(null);
-  const [operation, setOperation] = useState<'manual_add' | 'manual_remove'>('manual_add');
+  const [operation, setOperation] = useState<'manual_add' | 'manual_remove' | 'iiko_redeem'>('manual_add');
   const [amount, setAmount] = useState('300');
+  const [iikoOrderAmount, setIikoOrderAmount] = useState('');
+  const [iikoOrderId, setIikoOrderId] = useState('');
   const [reason, setReason] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'blocked' | 'inactive'>('all');
   const [levelFilter, setLevelFilter] = useState<'all' | 'bronze' | 'silver' | 'gold' | 'platinum'>('all');
@@ -111,6 +188,10 @@ export function ClientsScreen({
   const canViewClients = ['technician', 'owner', 'manager'].includes(currentUser.role);
   const clients = snapshot.guest_clients ?? [];
   const transactions = snapshot.guest_client_transactions ?? [];
+  const redemptions = snapshot.guest_bonus_redemptions ?? [];
+  const iikoExternalOrders = snapshot.iiko_external_orders ?? [];
+  const sessions = snapshot.table_guest_sessions ?? [];
+  const orders = snapshot.guest_orders ?? [];
   const query = search.trim().toLowerCase();
 
   const filtered = clients
@@ -145,6 +226,19 @@ export function ClientsScreen({
         .filter((note) => note.guest_id === selected.id || note.guest_phone === selected.phone)
         .slice(0, 4)
     : [];
+  const selectedSession = selected ? activeGuestSession(sessions, selected.id) : null;
+  const selectedOrder = selected ? openGuestOrder(orders, selected.id, selectedSession?.id) : null;
+  const selectedIikoExternalOrder = selected ? openIikoExternalOrder(iikoExternalOrders, selected.id, selectedSession?.id) : null;
+  const selectedRedemptions = selected
+    ? redemptions.filter((redemption) => redemption.guest_id === selected.id).slice(0, 5)
+    : [];
+  const iikoMax = maxIikoBonusAmount(iikoOrderAmount);
+  const modalTitle =
+    operation === 'manual_add'
+      ? 'Начислить бонусы'
+      : operation === 'iiko_redeem'
+        ? 'Списать бонусы к iiko-заказу'
+        : 'Списать бонусы';
 
   if (!canViewClients) {
     return (
@@ -254,6 +348,8 @@ export function ClientsScreen({
                 setSelected(client);
                 setOperation('manual_add');
                 setAmount('300');
+                setIikoOrderAmount('');
+                setIikoOrderId('');
                 setReason('Ручное начисление');
               }}
             />
@@ -265,7 +361,27 @@ export function ClientsScreen({
                 setSelected(client);
                 setOperation('manual_remove');
                 setAmount('300');
+                setIikoOrderAmount('');
+                setIikoOrderId('');
                 setReason('Ручное списание');
+              }}
+            />
+            <SecondaryButton
+              title="Списать iiko"
+              compact
+              danger
+              onPress={() => {
+                const session = activeGuestSession(sessions, client.id);
+                const order = openGuestOrder(orders, client.id, session?.id);
+                const iikoOrder = openIikoExternalOrder(iikoExternalOrders, client.id, session?.id);
+                const orderAmount = Number(iikoOrder?.amount ?? order?.iiko_order_sum ?? 0);
+                const maxAmount = Math.floor(orderAmount * 0.2);
+                setSelected(client);
+                setOperation('iiko_redeem');
+                setIikoOrderAmount(orderAmount > 0 ? String(orderAmount) : '');
+                setIikoOrderId(iikoOrder?.iiko_order_id ?? order?.iiko_order_id ?? '');
+                setAmount(maxAmount > 0 ? String(Math.min(Number(client.bonus_balance ?? 0), maxAmount)) : '');
+                setReason('Списание бонусов к заказу iiko');
               }}
             />
             {client.status === 'blocked' ? (
@@ -287,7 +403,7 @@ export function ClientsScreen({
       ))}
       <ModalSheet
         visible={Boolean(selected)}
-        title={operation === 'manual_add' ? 'Начислить бонусы' : 'Списать бонусы'}
+        title={modalTitle}
         onClose={() => setSelected(null)}
       >
         <Text style={styles.cardTitle}>{selected?.name}</Text>
@@ -327,6 +443,17 @@ export function ClientsScreen({
         ) : null}
         {selected ? (
           <Card tone="soft">
+            <Text style={styles.cardTitle}>Списания к iiko-заказам</Text>
+            {selectedRedemptions.map((redemption) => (
+              <GuestBonusRedemptionRow key={redemption.id} redemption={redemption} />
+            ))}
+            {selectedRedemptions.length === 0 ? (
+              <Text style={styles.mutedText}>Списаний, связанных с iiko-заказом, пока нет.</Text>
+            ) : null}
+          </Card>
+        ) : null}
+        {selected ? (
+          <Card tone="soft">
             <Text style={styles.cardTitle}>Заметки</Text>
             {selectedNotes.map((note) => (
               <MiniRow key={note.id} title={note.note} text={shortDateTime(note.updated_at ?? note.created_at)} />
@@ -344,18 +471,47 @@ export function ClientsScreen({
             />
           </Card>
         ) : null}
-        <Field label="Сумма" value={amount} onChangeText={setAmount} keyboardType="number-pad" />
+        {operation === 'iiko_redeem' ? (
+          <Card tone="soft">
+            <Text style={styles.cardTitle}>Правило списания</Text>
+            <MiniRow title="Курс" text="1 балл = 1 рубль" />
+            <MiniRow title="Лимит" text={`Можно списать до 20% заказа: ${iikoMax} бонусов`} />
+            <MiniRow title="Активный стол" text={selectedSession?.table_number ? `Стол ${selectedSession.table_number}` : 'Активная сессия не найдена'} />
+            <MiniRow title="iiko-заказ" text={selectedIikoExternalOrder?.iiko_order_number ?? selectedIikoExternalOrder?.iiko_order_id ?? 'Не выбран'} />
+            <MiniRow title="Локальный заказ" text={selectedOrder?.id ?? 'Не выбран'} />
+          </Card>
+        ) : null}
+        {operation === 'iiko_redeem' ? (
+          <>
+            <Field label="Сумма заказа в iiko" value={iikoOrderAmount} onChangeText={setIikoOrderAmount} keyboardType="number-pad" />
+            <Field label="ID заказа iiko" value={iikoOrderId} onChangeText={setIikoOrderId} autoCapitalize="none" />
+          </>
+        ) : null}
+        <Field label={operation === 'iiko_redeem' ? 'Бонусов списать' : 'Сумма'} value={amount} onChangeText={setAmount} keyboardType="number-pad" />
         <Field label="Причина" value={reason} onChangeText={setReason} />
         <PrimaryButton
-          title={operation === 'manual_add' ? 'Начислить' : 'Списать'}
+          title={operation === 'manual_add' ? 'Начислить' : operation === 'iiko_redeem' ? 'Списать к iiko-заказу' : 'Списать'}
           onPress={async () => {
             if (!selected) return;
-            await onMutate('POST', `/admin/guests/${selected.id}/bonus`, {
+            if (operation === 'iiko_redeem') {
+              const selectedIikoAmount = Number(selectedIikoExternalOrder?.amount ?? 0);
+              const result = await onMutate('POST', `/admin/guests/${selected.id}/bonus-redemptions`, {
+                amount: numberFromInput(amount),
+                order_amount: numberFromInput(iikoOrderAmount) || selectedIikoAmount,
+                iiko_order_id: iikoOrderId.trim() || selectedIikoExternalOrder?.iiko_order_id || '',
+                table_session_id: selectedSession?.id,
+                local_order_id: selectedOrder?.id,
+                reason,
+              });
+              if (result) setSelected(null);
+              return;
+            }
+            const result = await onMutate('POST', `/admin/guests/${selected.id}/bonus`, {
               operation,
               amount: Number(amount || 0),
               reason,
             });
-            setSelected(null);
+            if (result) setSelected(null);
           }}
         />
       </ModalSheet>

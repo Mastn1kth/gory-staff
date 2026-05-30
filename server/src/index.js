@@ -11,6 +11,11 @@ const { ipKeyGenerator, rateLimit } = require('express-rate-limit');
 const { Server } = require('socket.io');
 const { initDatabase, pool, query } = require('./db');
 const {
+  startIikoOrderStatusSyncScheduler,
+  syncGuestOrderToIiko,
+  syncOpenIikoOrderStatuses,
+} = require('./integrations/iiko');
+const {
   can,
   permissionsFor,
   roleDefinitions,
@@ -954,7 +959,21 @@ async function generateUniqueCardNumber(client) {
 
 async function addGuestBonusTransaction(
   client,
-  { guestId, type, amount, reason, source = 'guest_app', relatedGuestId = null, relatedVisitId = null, createdBy = null, allowNegative = false },
+  {
+    guestId,
+    type,
+    amount,
+    reason,
+    source = 'guest_app',
+    relatedGuestId = null,
+    relatedVisitId = null,
+    createdBy = null,
+    allowNegative = false,
+    iikoOrderId = null,
+    iikoPaymentEventId = null,
+    localOrderId = null,
+    tableSessionId = null,
+  },
 ) {
   const numericAmount = Number(amount ?? 0);
   if (!Number.isFinite(numericAmount) || numericAmount === 0) {
@@ -1002,10 +1021,28 @@ async function addGuestBonusTransaction(
   await client.query('UPDATE guest_cards SET level = $2, updated_at = NOW() WHERE guest_id = $1 AND status = $3', [guestId, nextLevel, 'active']);
   const inserted = await client.query(
     `INSERT INTO guest_bonus_transactions
-       (id, guest_id, type, amount, balance_before, balance_after, reason, source, related_guest_id, related_visit_id, created_by, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+       (id, guest_id, type, amount, balance_before, balance_after, reason, source,
+        related_guest_id, related_visit_id, created_by, iiko_order_id, iiko_payment_event_id,
+        local_order_id, table_session_id, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
      RETURNING *`,
-    [transactionId, guestId, type, numericAmount, balanceBefore, balanceAfter, reason, source, relatedGuestId, relatedVisitId, createdBy],
+    [
+      transactionId,
+      guestId,
+      type,
+      numericAmount,
+      balanceBefore,
+      balanceAfter,
+      reason,
+      source,
+      relatedGuestId,
+      relatedVisitId,
+      createdBy,
+      iikoOrderId,
+      iikoPaymentEventId,
+      localOrderId,
+      tableSessionId,
+    ],
   );
   let pushTitle = numericAmount > 0 ? 'Бонусы начислены' : 'Бонусы списаны';
   let pushText = numericAmount > 0 ? `На вашу карту начислено ${numericAmount} бонусов.` : `С вашей карты списано ${Math.abs(numericAmount)} бонусов.`;
@@ -1060,8 +1097,43 @@ async function issueGuestSession(client, guest, body = {}) {
   return token;
 }
 
+async function loadOrderItemModifiers(client, orderItemIds) {
+  if (!Array.isArray(orderItemIds) || orderItemIds.length === 0) return { rows: [] };
+  const placeholders = orderItemIds.map((_, index) => `$${index + 1}`).join(',');
+  return client.query(
+    `SELECT *
+     FROM guest_order_item_modifiers
+     WHERE order_item_id IN (${placeholders})
+     ORDER BY created_at ASC, id ASC`,
+    orderItemIds,
+  );
+}
+
+function attachOrderItemModifiers(orderItems, modifiers) {
+  const byOrderItemId = new Map();
+  for (const modifier of modifiers) {
+    const rows = byOrderItemId.get(modifier.order_item_id) ?? [];
+    rows.push(modifier);
+    byOrderItemId.set(modifier.order_item_id, rows);
+  }
+  return orderItems.map((item) => ({
+    ...item,
+    modifiers: byOrderItemId.get(item.id) ?? [],
+  }));
+}
+
 async function buildGuestPayload(client, guestId, token = null) {
-  const [guestResult, cardResult, transactionsResult, referralsResult, notificationsResult, activeSessionResult, orderItemsResult] = await Promise.all([
+  const [
+    guestResult,
+    cardResult,
+    transactionsResult,
+    referralsResult,
+    notificationsResult,
+    activeSessionResult,
+    orderItemsResult,
+    feedbackRequestsResult,
+    bonusRedemptionsResult,
+  ] = await Promise.all([
     client.query('SELECT * FROM guest_users WHERE id = $1', [guestId]),
     client.query('SELECT * FROM guest_cards WHERE guest_id = $1 AND status = $2 ORDER BY issued_at DESC LIMIT 1', [guestId, 'active']),
     client.query('SELECT * FROM guest_bonus_transactions WHERE guest_id = $1 ORDER BY created_at DESC LIMIT 30', [guestId]),
@@ -1110,9 +1182,26 @@ async function buildGuestPayload(client, guestId, token = null) {
        LIMIT 50`,
       [guestId],
     ),
+    client.query(
+      `SELECT *
+       FROM guest_feedback_requests
+       WHERE guest_id = $1
+       ORDER BY requested_at DESC
+       LIMIT 20`,
+      [guestId],
+    ),
+    client.query(
+      `SELECT *
+       FROM guest_bonus_redemptions
+       WHERE guest_id = $1
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [guestId],
+    ),
   ]);
 
   const guest = guestResult.rows[0];
+  const orderItemModifiers = await loadOrderItemModifiers(client, orderItemsResult.rows.map((item) => item.id));
   return {
     ...(token ? { token } : {}),
     guest: publicGuest(guest),
@@ -1125,7 +1214,9 @@ async function buildGuestPayload(client, guestId, token = null) {
     },
     notifications: notificationsResult.rows,
     current_table_session: activeSessionResult.rows[0] ?? null,
-    current_order_items: orderItemsResult.rows,
+    current_order_items: attachOrderItemModifiers(orderItemsResult.rows, orderItemModifiers.rows),
+    feedback_requests: feedbackRequestsResult.rows,
+    bonus_redemptions: bonusRedemptionsResult.rows,
     offers: [
       { id: 'welcome', title: 'Персональное предложение', text: 'После регистрации на вашу карту начислены стартовые бонусы.' },
       { id: 'birthday', title: 'День рождения', text: 'Укажите день рождения, чтобы получать личные предложения.' },
@@ -1175,6 +1266,44 @@ async function guestAuthMiddleware(req, res, next) {
   } catch (_error) {
     res.status(401).json({ error: 'Сессия истекла, войдите снова.' });
   }
+}
+
+async function optionalGuestAuthMiddleware(req, _res, next) {
+  const authHeader = req.headers.authorization ?? '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) {
+    next();
+    return;
+  }
+
+  try {
+    const payload = jwt.verify(token, guestJwtSecret);
+    if (payload.type !== 'guest') {
+      next();
+      return;
+    }
+    const hash = tokenHash(token);
+    const session = await query(
+      `SELECT *
+       FROM guest_sessions
+       WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()`,
+      [hash],
+    );
+    if (!session.rows[0]) {
+      next();
+      return;
+    }
+    const result = await query('SELECT * FROM guest_users WHERE id = $1 AND deleted_at IS NULL', [payload.sub]);
+    const guest = result.rows[0];
+    if (guest && guest.status !== 'blocked') {
+      await query('UPDATE guest_sessions SET last_seen_at = NOW() WHERE token_hash = $1', [hash]);
+      req.guest = guest;
+      req.guestToken = token;
+    }
+  } catch (_error) {
+    // Public guest endpoints should still work when the optional token is stale.
+  }
+  next();
 }
 
 async function getReservationConflict(client, { table_id, date, time, excludeId }) {
@@ -1319,6 +1448,18 @@ function compactMobileOrderItem(item) {
   };
 }
 
+function compactMobileOrderItemModifier(item) {
+  return {
+    id: item.id,
+    order_item_id: item.order_item_id,
+    menu_item_modifier_id: item.menu_item_modifier_id,
+    modifier_group_id: item.modifier_group_id,
+    name: item.name,
+    amount: item.amount,
+    price: item.price,
+  };
+}
+
 function compactMobileReservation(item) {
   return {
     id: item.id,
@@ -1364,10 +1505,10 @@ function trimMobileSnapshotToLimit(snapshot) {
     { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [] },
     { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [] },
     { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 80) },
-    { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 40) },
-    { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 20) },
-    { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 10), notifications: snapshot.notifications.slice(0, 10) },
-    { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 5), notifications: snapshot.notifications.slice(0, 5) },
+    { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 40), menu_item_modifiers: [] },
+    { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 20), menu_item_modifier_groups: [], menu_item_modifiers: [] },
+    { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 10), menu_item_modifier_groups: [], menu_item_modifiers: [], guest_order_item_modifiers: [], notifications: snapshot.notifications.slice(0, 10) },
+    { ...snapshot, floors: [], tables: [], reservations: [], waitlist_entries: [], events: [], tasks: [], announcements: [], rules: [], users: [snapshot.current_user], stop_list: [], menu_items: snapshot.menu_items.slice(0, 5), menu_item_modifier_groups: [], menu_item_modifiers: [], guest_order_item_modifiers: [], notifications: snapshot.notifications.slice(0, 5) },
   ];
   return candidates.find((candidate) => mobileSnapshotBytes(candidate) <= MOBILE_SYNC_MAX_BYTES) ?? candidates[candidates.length - 1];
 }
@@ -1393,6 +1534,8 @@ function compactMobileSnapshot(snapshot) {
     menu_items: Array.isArray(snapshot.menu_items)
       ? snapshot.menu_items.map(compactMobileMenuItem)
       : [],
+    menu_item_modifier_groups: snapshot.menu_item_modifier_groups ?? [],
+    menu_item_modifiers: snapshot.menu_item_modifiers ?? [],
     notebook_notes: snapshot.notebook_notes,
     stop_list: Array.isArray(snapshot.stop_list) ? snapshot.stop_list.map(compactMobileStopListItem) : [],
     floors: snapshot.floors,
@@ -1420,10 +1563,22 @@ function compactMobileSnapshot(snapshot) {
     guest_client_transactions: Array.isArray(snapshot.guest_client_transactions)
       ? snapshot.guest_client_transactions.slice(0, MOBILE_SYNC_GUEST_TRANSACTION_LIMIT)
       : [],
+    guest_bonus_redemptions: Array.isArray(snapshot.guest_bonus_redemptions)
+      ? snapshot.guest_bonus_redemptions.slice(0, MOBILE_SYNC_GUEST_TRANSACTION_LIMIT)
+      : [],
+    iiko_external_orders: Array.isArray(snapshot.iiko_external_orders)
+      ? snapshot.iiko_external_orders.slice(0, MOBILE_SYNC_GUEST_TRANSACTION_LIMIT)
+      : [],
     shift_checklist: snapshot.shift_checklist,
     supply_requests: snapshot.supply_requests,
     guest_orders: Array.isArray(snapshot.guest_orders) ? snapshot.guest_orders.slice(0, 40) : [],
     guest_order_items: Array.isArray(snapshot.guest_order_items) ? snapshot.guest_order_items.slice(0, 80).map(compactMobileOrderItem) : [],
+    guest_order_item_modifiers: Array.isArray(snapshot.guest_order_item_modifiers)
+      ? snapshot.guest_order_item_modifiers.slice(0, 160).map(compactMobileOrderItemModifier)
+      : [],
+    social_posts: Array.isArray(snapshot.social_posts) ? snapshot.social_posts.slice(0, 30) : [],
+    social_post_media: Array.isArray(snapshot.social_post_media) ? snapshot.social_post_media.slice(0, 80) : [],
+    social_post_comments: Array.isArray(snapshot.social_post_comments) ? snapshot.social_post_comments.slice(0, 80) : [],
     hall_signals: snapshot.hall_signals ?? [],
     table_guest_sessions: snapshot.table_guest_sessions ?? [],
     menu_restored_alerts: snapshot.menu_restored_alerts ?? [],
@@ -1656,7 +1811,7 @@ async function getSnapshot(user, options = {}) {
       ),
     ]);
 
-    const [guestClients, guestClientTransactions] = canManageGuestClients(user.role)
+    const [guestClients, guestClientTransactions, guestBonusRedemptions, iikoExternalOrders] = canManageGuestClients(user.role)
       ? await Promise.all([
            client.query(
              `SELECT
@@ -1678,10 +1833,33 @@ async function getSnapshot(user, options = {}) {
               WHERE gu.deleted_at IS NULL
               ORDER BY gu.updated_at DESC, gu.created_at DESC
               LIMIT 100`,
-           ),
+          ),
           client.query('SELECT * FROM guest_bonus_transactions ORDER BY created_at DESC LIMIT 200'),
+          client.query('SELECT * FROM guest_bonus_redemptions ORDER BY created_at DESC LIMIT 200'),
+          client.query('SELECT * FROM iiko_external_orders ORDER BY updated_at DESC LIMIT 200'),
         ])
-      : [{ rows: [] }, { rows: [] }];
+      : [{ rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }];
+
+    const menuItemIds = menuItems.rows.map((item) => item.id);
+    const menuModifierGroups = menuItemIds.length > 0
+      ? await client.query(
+          `SELECT *
+           FROM menu_item_modifier_groups
+           WHERE menu_item_id = ANY($1::text[])
+           ORDER BY menu_item_id, sort_order ASC, name ASC`,
+          [menuItemIds],
+        )
+      : { rows: [] };
+    const menuModifierGroupIds = menuModifierGroups.rows.map((group) => group.id);
+    const menuModifiers = menuModifierGroupIds.length > 0
+      ? await client.query(
+          `SELECT *
+           FROM menu_item_modifiers
+           WHERE modifier_group_id = ANY($1::text[])
+           ORDER BY modifier_group_id, sort_order ASC, name ASC`,
+          [menuModifierGroupIds],
+        )
+      : { rows: [] };
 
     const canSeeGuestOrders = ['technician', 'manager', 'administrator', 'waiter', 'chef', 'cook', 'bar'].includes(user.role);
     const orderItemWhere = [];
@@ -1733,8 +1911,32 @@ async function getSnapshot(user, options = {}) {
            WHERE go.id = ANY($1::text[])
            ORDER BY go.created_at DESC`,
           [[...new Set(orderItems.rows.map((item) => item.order_id))]],
-        )
+      )
       : { rows: [] };
+    const guestOrderItemModifiers = canSeeGuestOrders
+      ? await loadOrderItemModifiers(client, orderItems.rows.map((item) => item.id))
+      : { rows: [] };
+
+    const canSeeSmm = can(user.role, 'view:smm');
+    const [socialPosts, socialPostMedia, socialPostComments] = canSeeSmm
+      ? await Promise.all([
+          client.query('SELECT * FROM social_posts ORDER BY COALESCE(published_at, created_at) DESC, created_at DESC LIMIT 100'),
+          client.query(
+            `SELECT spm.*
+             FROM social_post_media spm
+             JOIN social_posts sp ON sp.id = spm.post_id
+             ORDER BY COALESCE(sp.published_at, sp.created_at) DESC, spm.sort_order ASC
+             LIMIT 200`,
+          ),
+          client.query(
+            `SELECT c.*, gu.name AS guest_name
+             FROM social_post_comments c
+             JOIN guest_users gu ON gu.id = c.guest_id
+             ORDER BY c.created_at DESC
+             LIMIT 200`,
+          ),
+        ])
+      : [{ rows: [] }, { rows: [] }, { rows: [] }];
 
     const pushDevices = await client.query(
       `SELECT id, platform, app_version, device_name, is_active, last_seen_at, created_at, updated_at, revoked_at
@@ -1788,6 +1990,8 @@ async function getSnapshot(user, options = {}) {
       shifts,
       menu_categories: menuCategories.rows,
       menu_items: menuItems.rows,
+      menu_item_modifier_groups: menuModifierGroups.rows,
+      menu_item_modifiers: menuModifiers.rows,
       notebook_notes: notebookNotes.rows,
       stop_list: stopList.rows,
       floors: floors.rows,
@@ -1807,10 +2011,16 @@ async function getSnapshot(user, options = {}) {
       guest_notes: guestNotes.rows,
       guest_clients: guestClients.rows.map(publicGuest),
       guest_client_transactions: guestClientTransactions.rows,
+      guest_bonus_redemptions: guestBonusRedemptions.rows,
+      iiko_external_orders: iikoExternalOrders.rows,
       shift_checklist: shiftChecklist.rows,
       supply_requests: supplyRequests.rows,
       guest_orders: guestOrders.rows,
-      guest_order_items: orderItems.rows,
+      guest_order_items: attachOrderItemModifiers(orderItems.rows, guestOrderItemModifiers.rows),
+      guest_order_item_modifiers: guestOrderItemModifiers.rows,
+      social_posts: socialPosts.rows,
+      social_post_media: socialPostMedia.rows,
+      social_post_comments: socialPostComments.rows,
       hall_signals: coordinationApi ? await coordinationApi.loadHallSignals(client) : [],
       table_guest_sessions: coordinationApi ? await coordinationApi.loadTableGuestSessions(client) : [],
       menu_restored_alerts: coordinationApi ? await coordinationApi.loadMenuRestoredAlerts(client, user.id) : [],
@@ -1830,6 +2040,7 @@ const routeDeps = {
   asyncHandler,
   authMiddleware,
   guestAuthMiddleware,
+  optionalGuestAuthMiddleware,
   requirePermission,
   requireManager: requireStaffManagement,
   randomUUID,
@@ -1891,6 +2102,8 @@ const routeDeps = {
   sendChatPush,
   io,
   getCoordinationApi: () => coordinationApi,
+  syncGuestOrderToIiko,
+  syncOpenIikoOrderStatuses,
 };
 
 coordinationApi = registerCoordinationRoutes(app, routeDeps);
@@ -1995,6 +2208,15 @@ async function bootstrap() {
 
   server.listen(port, host, () => {
     console.log(`Горы API is running on http://${host}:${port}`);
+    const iikoOrderStatusScheduler = startIikoOrderStatusSyncScheduler({
+      db: pool,
+      env: process.env,
+      randomUUID,
+      logger: console,
+    });
+    if (iikoOrderStatusScheduler.enabled) {
+      console.log(`iiko order status sync runs every ${Math.round(iikoOrderStatusScheduler.intervalMs / 1000)} seconds.`);
+    }
     void sendUpcomingEventNotifications();
     if (pushReminderIntervalMs > 0) {
       const reminderTimer = setInterval(() => {

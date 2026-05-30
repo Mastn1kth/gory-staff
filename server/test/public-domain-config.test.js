@@ -54,6 +54,27 @@ test('desktop start script keeps the local server and public relay alive', () =>
   assert.match(watchdog, /pg_isready/i);
 });
 
+test('main start and stop scripts manage the iiko event connector with the stack', () => {
+  const start = read('tools/bat/START_GORY_STAFF.bat');
+  const stop = read('tools/bat/STOP_GORY_STAFF.bat');
+  const control = read('gory-control/GoryControl.ps1');
+  const watchdog = read('tools/Watch-GoryStaff.ps1');
+
+  assert.match(start, /START_IIKO_EVENT_CONNECTOR\.bat/i);
+  assert.match(start, /iiko-event-connector/i);
+  assert.match(start, /IIKO_WEBHOOK_SECRET/i);
+  assert.match(start, /coreKeys/i);
+
+  assert.match(stop, /iiko-event-connector\\?\.js/i);
+  assert.match(stop, /Stopping iiko event connector/i);
+
+  assert.match(control, /iiko-event-connector\\?\.js/i);
+  assert.match(control, /iiko connector/i);
+
+  assert.match(watchdog, /Ensure-IikoEventConnector/i);
+  assert.match(watchdog, /iiko-event-connector\.js/i);
+});
+
 test('public relay carries HTTP and WebSocket traffic through Cloudflare Durable Object', () => {
   const worker = read('cloudflare/https-relay/worker.js');
   const connector = read('tools/gory-edge-connector.js');

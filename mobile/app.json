@@ -2,7 +2,7 @@
     "expo":  {
                  "name":  "Горы",
                  "slug":  "gory-staff",
-                 "version":  "0.1.42",
+                 "version":  "0.1.46",
                  "orientation":  "default",
                  "icon":  "./assets/icon.png",
                  "userInterfaceStyle":  "automatic",
@@ -15,7 +15,7 @@
                                  "permissions":  [
                                                      "POST_NOTIFICATIONS"
                                                  ],
-                                 "versionCode":  43,
+                                 "versionCode":  47,
                                  "usesCleartextTraffic":  true,
                                  "softwareKeyboardLayoutMode":  "resize",
                                  "adaptiveIcon":  {
@@ -29,7 +29,8 @@
                                 "backgroundColor":  "#18221F"
                             },
                  "plugins":  [
-                                 "expo-notifications"
+                                 "expo-notifications",
+                                 "expo-video"
                              ],
                  "extra":  {
                                "eas":  {

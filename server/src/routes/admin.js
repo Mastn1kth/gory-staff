@@ -21,6 +21,23 @@ function registerAdminRoutes(app, deps) {
     websocketUrlForApi,
   } = deps;
 
+  function redemptionOrderAmount(body) {
+    const value = Number(body?.order_amount ?? body?.orderAmount ?? body?.order_sum ?? body?.orderSum ?? body?.payment_amount ?? body?.paymentAmount ?? 0);
+    if (!Number.isFinite(value) || value <= 0) throw httpError('Передайте сумму заказа для расчета лимита списания.', 400);
+    return Math.round(value);
+  }
+
+  function maxRedemptionAmount(orderAmount) {
+    return Math.floor(Number(orderAmount) * 0.2);
+  }
+
+  function validateRedemptionLimit(amount, orderAmount) {
+    const maxAmount = maxRedemptionAmount(orderAmount);
+    if (maxAmount <= 0) throw httpError('Для этого заказа нельзя списать бонусы.', 400);
+    if (amount > maxAmount) throw httpError('Можно списать не больше 20% от суммы заказа. 1 балл = 1 рубль.', 400);
+    return maxAmount;
+  }
+
   app.get(
     '/admin/guests',
     authMiddleware,
@@ -103,6 +120,129 @@ function registerAdminRoutes(app, deps) {
         await client.query('COMMIT');
         emitChange('guest_users', 'updated', payload.guest);
         res.json({ transaction, ...payload });
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  app.post(
+    '/admin/guests/:id/bonus-redemptions',
+    authMiddleware,
+    asyncHandler(async (req, res) => {
+      if (!canManageGuestClients(req.user.role)) throw httpError('Клиентская база доступна только управляющему и администратору.', 403);
+      const amount = Math.round(Number(req.body?.amount ?? 0));
+      if (!Number.isFinite(amount) || amount <= 0) throw httpError('Введите сумму бонусов для списания.', 400);
+      const orderAmount = redemptionOrderAmount(req.body ?? {});
+      const maxBonusAmount = validateRedemptionLimit(amount, orderAmount);
+      const iikoOrderId = String(req.body?.iiko_order_id ?? req.body?.iikoOrderId ?? '').trim() || null;
+      const localOrderId = String(req.body?.local_order_id ?? req.body?.localOrderId ?? '').trim() || null;
+      if (!iikoOrderId && !localOrderId) {
+        throw httpError('Передайте iiko_order_id или local_order_id для связи списания с оплачиваемым заказом.', 400);
+      }
+      const requestedSessionId = String(req.body?.table_session_id ?? req.body?.tableSessionId ?? '').trim() || null;
+      const reason = String(req.body?.reason ?? 'Списание бонусов к заказу iiko').trim();
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const guest = (
+          await client.query('SELECT * FROM guest_users WHERE id = $1 AND deleted_at IS NULL LIMIT 1', [req.params.id])
+        ).rows[0];
+        if (!guest) throw httpError('Гость не найден.', 404);
+
+        const session = requestedSessionId
+          ? (
+              await client.query(
+                `SELECT *
+                 FROM table_guest_sessions
+                 WHERE id = $1 AND guest_id = $2
+                 LIMIT 1`,
+                [requestedSessionId, req.params.id],
+              )
+            ).rows[0]
+          : (
+              await client.query(
+                `SELECT *
+                 FROM table_guest_sessions
+                 WHERE guest_id = $1 AND status = 'active'
+                 ORDER BY checked_in_at DESC
+                 LIMIT 1`,
+                [req.params.id],
+              )
+            ).rows[0];
+        if (!session) throw httpError('Активный визит гостя не найден.', 400);
+
+        if (localOrderId) {
+          const order = (
+            await client.query(
+              `SELECT id
+               FROM guest_orders
+               WHERE id = $1
+                 AND guest_id = $2
+                 AND (table_session_id = $3 OR table_session_id IS NULL)
+               LIMIT 1`,
+              [localOrderId, req.params.id, session.id],
+            )
+          ).rows[0];
+          if (!order) throw httpError('Заказ не найден для текущего гостя.', 404);
+        }
+
+        const transaction = await addGuestBonusTransaction(client, {
+          guestId: req.params.id,
+          type: 'iiko_bonus_redeem',
+          amount: -amount,
+          reason,
+          source: 'staff_iiko_payment',
+          relatedVisitId: session.id,
+          createdBy: req.user.id,
+          iikoOrderId,
+          localOrderId,
+          tableSessionId: session.id,
+        });
+        const redemption = (
+          await client.query(
+            `INSERT INTO guest_bonus_redemptions
+               (id, guest_id, table_session_id, local_order_id, iiko_order_id,
+                bonus_transaction_id, amount, order_amount, max_bonus_amount, bonus_to_ruble_rate,
+                status, reason, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,'reserved',$10,NOW(),NOW())
+             RETURNING *`,
+            [
+              randomUUID(),
+              req.params.id,
+              session.id,
+              localOrderId,
+              iikoOrderId,
+              transaction.id,
+              amount,
+              orderAmount,
+              maxBonusAmount,
+              reason,
+            ],
+          )
+        ).rows[0];
+        await logActivity(client, req.user.id, 'iiko_bonus_redeem', 'guest_user', req.params.id, null, {
+          amount,
+          order_amount: orderAmount,
+          max_bonus_amount: maxBonusAmount,
+          iiko_order_id: iikoOrderId,
+          redemption_id: redemption.id,
+        });
+        await createRoleNotifications(client, ['management'], {
+          title: 'Списание бонусов к iiko-заказу',
+          text: `${amount} бонусов · лимит ${maxBonusAmount} · ${reason}`,
+          type: 'iiko_bonus_redeem',
+          data: { guest_id: req.params.id, transaction_id: transaction.id, redemption_id: redemption.id, iiko_order_id: iikoOrderId },
+        });
+        const payload = await buildGuestPayload(client, req.params.id);
+        await client.query('COMMIT');
+        emitChange('guest_users', 'updated', payload.guest);
+        emitChange('guest_bonus_redemptions', 'created', redemption);
+        res.status(201).json({ redemption, transaction, guest: payload.guest });
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;

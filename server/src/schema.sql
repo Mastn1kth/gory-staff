@@ -56,6 +56,20 @@ CREATE TABLE IF NOT EXISTS menu_categories (
   sort_order INTEGER NOT NULL DEFAULT 0
 );
 
+ALTER TABLE menu_categories
+  ADD COLUMN IF NOT EXISTS iiko_id TEXT;
+
+ALTER TABLE menu_categories
+  ADD COLUMN IF NOT EXISTS iiko_parent_group_id TEXT;
+
+ALTER TABLE menu_categories
+  ADD COLUMN IF NOT EXISTS iiko_is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE menu_categories
+  ADD COLUMN IF NOT EXISTS iiko_last_seen_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_categories_iiko_id ON menu_categories(iiko_id) WHERE iiko_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS menu_items (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -100,22 +114,149 @@ ALTER TABLE menu_items
 ALTER TABLE menu_items
   ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS iiko_id TEXT;
+
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS iiko_group_id TEXT;
+
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS iiko_product_category_id TEXT;
+
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS iiko_size_id TEXT;
+
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS iiko_modifier_schema_id TEXT;
+
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS iiko_raw_type TEXT;
+
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS iiko_is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS iiko_last_seen_at TIMESTAMPTZ;
+
+ALTER TABLE menu_items
+  ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_items_iiko_id ON menu_items(iiko_id) WHERE iiko_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_menu_items_iiko_group ON menu_items(iiko_group_id);
+
+CREATE TABLE IF NOT EXISTS menu_item_modifier_groups (
+  id TEXT PRIMARY KEY,
+  menu_item_id TEXT NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  iiko_modifier_group_id TEXT NOT NULL,
+  iiko_modifier_schema_id TEXT,
+  required BOOLEAN NOT NULL DEFAULT FALSE,
+  min_amount INTEGER,
+  max_amount INTEGER,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  iiko_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  iiko_last_seen_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(menu_item_id, iiko_modifier_group_id)
+);
+
+CREATE TABLE IF NOT EXISTS menu_item_modifiers (
+  id TEXT PRIMARY KEY,
+  modifier_group_id TEXT NOT NULL REFERENCES menu_item_modifier_groups(id) ON DELETE CASCADE,
+  iiko_modifier_product_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  price INTEGER NOT NULL DEFAULT 0,
+  min_amount INTEGER,
+  max_amount INTEGER,
+  default_amount INTEGER,
+  free_of_charge_amount INTEGER,
+  hide_if_default_amount BOOLEAN NOT NULL DEFAULT FALSE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  iiko_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  iiko_last_seen_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(modifier_group_id, iiko_modifier_product_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_menu_item_modifier_groups_menu_item ON menu_item_modifier_groups(menu_item_id, status);
+CREATE INDEX IF NOT EXISTS idx_menu_item_modifiers_group ON menu_item_modifiers(modifier_group_id, status);
+CREATE INDEX IF NOT EXISTS idx_menu_item_modifiers_iiko_product ON menu_item_modifiers(iiko_modifier_product_id);
+
 CREATE TABLE IF NOT EXISTS stop_list (
   id TEXT PRIMARY KEY,
   menu_item_id TEXT NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
   reason TEXT NOT NULL,
   status TEXT NOT NULL,
-  added_by TEXT NOT NULL REFERENCES users(id),
+  added_by TEXT REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expected_return_at TIMESTAMPTZ,
   comment TEXT
 );
 
 ALTER TABLE stop_list
+  ALTER COLUMN added_by DROP NOT NULL;
+
+ALTER TABLE stop_list
   ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 
 ALTER TABLE stop_list
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE stop_list
+  ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'local';
+
+ALTER TABLE stop_list
+  ADD COLUMN IF NOT EXISTS iiko_product_id TEXT;
+
+ALTER TABLE stop_list
+  ADD COLUMN IF NOT EXISTS iiko_size_id TEXT;
+
+ALTER TABLE stop_list
+  ADD COLUMN IF NOT EXISTS iiko_terminal_group_id TEXT;
+
+ALTER TABLE stop_list
+  ADD COLUMN IF NOT EXISTS iiko_last_seen_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_stop_list_iiko_product ON stop_list(iiko_product_id, status);
+
+CREATE TABLE IF NOT EXISTS iiko_sync_log (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  categories_created INTEGER NOT NULL DEFAULT 0,
+  categories_updated INTEGER NOT NULL DEFAULT 0,
+  items_created INTEGER NOT NULL DEFAULT 0,
+  items_updated INTEGER NOT NULL DEFAULT 0,
+  items_archived INTEGER NOT NULL DEFAULT 0,
+  stop_list_items INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT
+);
+
+ALTER TABLE iiko_sync_log
+  ADD COLUMN IF NOT EXISTS modifier_groups_created INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE iiko_sync_log
+  ADD COLUMN IF NOT EXISTS modifier_groups_updated INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE iiko_sync_log
+  ADD COLUMN IF NOT EXISTS modifier_groups_archived INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE iiko_sync_log
+  ADD COLUMN IF NOT EXISTS modifiers_created INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE iiko_sync_log
+  ADD COLUMN IF NOT EXISTS modifiers_updated INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE iiko_sync_log
+  ADD COLUMN IF NOT EXISTS modifiers_archived INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_iiko_sync_log_finished ON iiko_sync_log(finished_at DESC);
 
 CREATE TABLE IF NOT EXISTS notebook_notes (
   id TEXT PRIMARY KEY,
@@ -270,6 +411,18 @@ CREATE TABLE IF NOT EXISTS guest_bonus_transactions (
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE guest_bonus_transactions
+  ADD COLUMN IF NOT EXISTS iiko_order_id TEXT;
+
+ALTER TABLE guest_bonus_transactions
+  ADD COLUMN IF NOT EXISTS iiko_payment_event_id TEXT;
+
+ALTER TABLE guest_bonus_transactions
+  ADD COLUMN IF NOT EXISTS local_order_id TEXT;
+
+ALTER TABLE guest_bonus_transactions
+  ADD COLUMN IF NOT EXISTS table_session_id TEXT;
 
 CREATE TABLE IF NOT EXISTS guest_referrals (
   id TEXT PRIMARY KEY,
@@ -646,7 +799,11 @@ CREATE INDEX IF NOT EXISTS idx_notification_delivery_notification ON notificatio
 ALTER TABLE "tables"
   ADD COLUMN IF NOT EXISTS checkin_token TEXT;
 
+ALTER TABLE "tables"
+  ADD COLUMN IF NOT EXISTS iiko_table_id TEXT;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tables_checkin_token ON "tables"(checkin_token) WHERE checkin_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tables_iiko_table_id ON "tables"(iiko_table_id) WHERE iiko_table_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS hall_signals (
   id TEXT PRIMARY KEY,
@@ -699,6 +856,39 @@ CREATE TABLE IF NOT EXISTS guest_orders (
 ALTER TABLE guest_orders
   ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_order_id TEXT;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_correlation_id TEXT;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_creation_status TEXT;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_sync_status TEXT;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_sync_error TEXT;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_synced_at TIMESTAMPTZ;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_order_status TEXT;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_order_number INTEGER;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_order_sum INTEGER;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_order_closed_at TIMESTAMPTZ;
+
+ALTER TABLE guest_orders
+  ADD COLUMN IF NOT EXISTS iiko_order_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE TABLE IF NOT EXISTS guest_order_items (
   id TEXT PRIMARY KEY,
   order_id TEXT NOT NULL REFERENCES guest_orders(id) ON DELETE CASCADE,
@@ -714,9 +904,210 @@ CREATE TABLE IF NOT EXISTS guest_order_items (
 ALTER TABLE guest_order_items
   ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 
+ALTER TABLE guest_order_items
+  ADD COLUMN IF NOT EXISTS iiko_position_id TEXT;
+
+ALTER TABLE guest_order_items
+  ADD COLUMN IF NOT EXISTS iiko_sync_status TEXT;
+
+ALTER TABLE guest_order_items
+  ADD COLUMN IF NOT EXISTS iiko_sync_error TEXT;
+
+ALTER TABLE guest_order_items
+  ADD COLUMN IF NOT EXISTS iiko_synced_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS guest_order_item_modifiers (
+  id TEXT PRIMARY KEY,
+  order_item_id TEXT NOT NULL REFERENCES guest_order_items(id) ON DELETE CASCADE,
+  menu_item_modifier_id TEXT REFERENCES menu_item_modifiers(id) ON DELETE SET NULL,
+  modifier_group_id TEXT REFERENCES menu_item_modifier_groups(id) ON DELETE SET NULL,
+  iiko_modifier_product_id TEXT NOT NULL,
+  iiko_modifier_group_id TEXT,
+  name TEXT NOT NULL,
+  amount DOUBLE PRECISION NOT NULL DEFAULT 1,
+  price INTEGER NOT NULL DEFAULT 0,
+  iiko_position_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_guest_orders_guest_status ON guest_orders(guest_id, status);
 CREATE INDEX IF NOT EXISTS idx_guest_orders_table_status ON guest_orders(table_id, status);
+CREATE INDEX IF NOT EXISTS idx_guest_orders_iiko_order_id ON guest_orders(iiko_order_id) WHERE iiko_order_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_guest_order_items_order ON guest_order_items(order_id, status);
+CREATE INDEX IF NOT EXISTS idx_guest_order_items_iiko_sync ON guest_order_items(order_id, iiko_sync_status);
+CREATE INDEX IF NOT EXISTS idx_guest_order_item_modifiers_item ON guest_order_item_modifiers(order_item_id);
+CREATE INDEX IF NOT EXISTS idx_guest_order_item_modifiers_iiko_product ON guest_order_item_modifiers(iiko_modifier_product_id);
+
+CREATE TABLE IF NOT EXISTS iiko_order_sync_log (
+  id TEXT PRIMARY KEY,
+  order_id TEXT,
+  operation TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  items_synced INTEGER NOT NULL DEFAULT 0,
+  iiko_order_id TEXT,
+  correlation_id TEXT,
+  error_message TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_iiko_order_sync_log_finished ON iiko_order_sync_log(finished_at DESC);
+CREATE INDEX IF NOT EXISTS idx_iiko_order_sync_log_order ON iiko_order_sync_log(order_id, finished_at DESC);
+
+CREATE TABLE IF NOT EXISTS iiko_external_orders (
+  id TEXT PRIMARY KEY,
+  iiko_order_id TEXT NOT NULL UNIQUE,
+  iiko_order_number TEXT,
+  iiko_terminal_group_id TEXT,
+  iiko_organization_id TEXT,
+  iiko_table_id TEXT,
+  table_id TEXT REFERENCES "tables"(id) ON DELETE SET NULL,
+  table_number TEXT,
+  table_session_id TEXT REFERENCES table_guest_sessions(id) ON DELETE SET NULL,
+  guest_id TEXT REFERENCES guest_users(id) ON DELETE SET NULL,
+  guest_phone TEXT,
+  amount INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'open',
+  payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  closed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_iiko_external_orders_guest_status ON iiko_external_orders(guest_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_iiko_external_orders_session ON iiko_external_orders(table_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_iiko_external_orders_table ON iiko_external_orders(table_id, status);
+
+CREATE TABLE IF NOT EXISTS iiko_payment_events (
+  id TEXT PRIMARY KEY,
+  dedup_key TEXT NOT NULL UNIQUE,
+  iiko_order_id TEXT,
+  iiko_payment_id TEXT,
+  iiko_terminal_group_id TEXT,
+  iiko_organization_id TEXT,
+  local_order_id TEXT REFERENCES guest_orders(id) ON DELETE SET NULL,
+  table_session_id TEXT REFERENCES table_guest_sessions(id) ON DELETE SET NULL,
+  guest_id TEXT REFERENCES guest_users(id) ON DELETE SET NULL,
+  guest_phone TEXT,
+  amount INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'RUB',
+  status TEXT NOT NULL,
+  payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  notification_id TEXT REFERENCES notifications(id) ON DELETE SET NULL,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_iiko_payment_events_guest ON iiko_payment_events(guest_id, processed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_iiko_payment_events_iiko_order ON iiko_payment_events(iiko_order_id) WHERE iiko_order_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS guest_bonus_redemptions (
+  id TEXT PRIMARY KEY,
+  guest_id TEXT NOT NULL REFERENCES guest_users(id) ON DELETE CASCADE,
+  table_session_id TEXT REFERENCES table_guest_sessions(id) ON DELETE SET NULL,
+  local_order_id TEXT REFERENCES guest_orders(id) ON DELETE SET NULL,
+  iiko_order_id TEXT,
+  iiko_payment_event_id TEXT REFERENCES iiko_payment_events(id) ON DELETE SET NULL,
+  bonus_transaction_id TEXT REFERENCES guest_bonus_transactions(id) ON DELETE SET NULL,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  order_amount INTEGER NOT NULL DEFAULT 0 CHECK (order_amount >= 0),
+  max_bonus_amount INTEGER NOT NULL DEFAULT 0 CHECK (max_bonus_amount >= 0),
+  bonus_to_ruble_rate INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'reserved',
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  applied_at TIMESTAMPTZ,
+  cancelled_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_guest_bonus_redemptions_guest_status ON guest_bonus_redemptions(guest_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_guest_bonus_redemptions_iiko_order ON guest_bonus_redemptions(iiko_order_id) WHERE iiko_order_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_guest_bonus_redemptions_payment ON guest_bonus_redemptions(iiko_payment_event_id) WHERE iiko_payment_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_guest_bonus_redemptions_session ON guest_bonus_redemptions(table_session_id, status);
+
+CREATE TABLE IF NOT EXISTS guest_feedback_requests (
+  id TEXT PRIMARY KEY,
+  guest_id TEXT NOT NULL REFERENCES guest_users(id) ON DELETE CASCADE,
+  iiko_payment_event_id TEXT REFERENCES iiko_payment_events(id) ON DELETE SET NULL,
+  table_session_id TEXT REFERENCES table_guest_sessions(id) ON DELETE SET NULL,
+  local_order_id TEXT REFERENCES guest_orders(id) ON DELETE SET NULL,
+  rating INTEGER,
+  comment TEXT,
+  status TEXT NOT NULL DEFAULT 'requested',
+  notification_id TEXT REFERENCES notifications(id) ON DELETE SET NULL,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  responded_at TIMESTAMPTZ,
+  UNIQUE(iiko_payment_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_guest_feedback_requests_guest ON guest_feedback_requests(guest_id, requested_at DESC);
+
+CREATE TABLE IF NOT EXISTS social_posts (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual',
+  source_external_id TEXT,
+  source_url TEXT,
+  author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  author_name TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',
+  published_at TIMESTAMPTZ,
+  import_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS social_post_media (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  media_type TEXT NOT NULL DEFAULT 'image',
+  url TEXT NOT NULL,
+  thumbnail_url TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  source_external_id TEXT,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS social_post_likes (
+  post_id TEXT NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  guest_id TEXT NOT NULL REFERENCES guest_users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (post_id, guest_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_post_comments (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL REFERENCES social_posts(id) ON DELETE CASCADE,
+  guest_id TEXT NOT NULL REFERENCES guest_users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'visible',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS social_import_runs (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL,
+  imported_count INTEGER NOT NULL DEFAULT 0,
+  message TEXT,
+  payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_posts_status_published ON social_posts(status, published_at DESC, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_social_posts_source_external ON social_posts(source, source_external_id) WHERE source_external_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_social_post_media_post ON social_post_media(post_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_social_post_likes_guest ON social_post_likes(guest_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_post_comments_post ON social_post_comments(post_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_import_runs_source_time ON social_import_runs(source, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS menu_restored_alerts (
   id TEXT PRIMARY KEY,

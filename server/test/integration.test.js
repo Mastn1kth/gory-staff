@@ -279,6 +279,41 @@ test('staff auth does not reveal whether login exists', async (t) => {
   assert.equal(wrongPassword.body.error, 'Логин или пароль неверный.');
 });
 
+test('guest auth and phone changes work without confirmation code', async (t) => {
+  const server = await startTestServer({
+    INITIAL_MANAGER_LOGIN: 'owner@example.test',
+    INITIAL_MANAGER_PASSWORD: 'OwnerTestPass-2026!',
+    DEMO_STAFF_PASSWORD: 'StaffTestPass-2026!',
+  });
+  t.after(server.stop);
+
+  const phone = '8 960 509 23 31';
+  const guest = await api(server.baseUrl, '/guest/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'Phone Guest',
+      phone,
+      personal_data_consent: true,
+    }),
+  });
+  assert.ok(guest.token);
+  assert.equal(guest.guest.phone, '+79605092331');
+
+  const login = await api(server.baseUrl, '/guest/login', {
+    method: 'POST',
+    body: JSON.stringify({ phone }),
+  });
+  assert.ok(login.token);
+
+  const newPhone = '8 960 555 44 44';
+  const changed = await api(server.baseUrl, '/guest/profile', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${login.token}` },
+    body: JSON.stringify({ phone: newPhone }),
+  });
+  assert.equal(changed.guest.phone, '+79605554444');
+});
+
 test('staff login rate limit uses trusted Cloudflare client IP and security headers are enabled', async (t) => {
   const server = await startTestServer({
     INITIAL_MANAGER_LOGIN: 'owner@example.test',
@@ -524,6 +559,407 @@ test('guest table order flows through waiter and kitchen statuses', async (t) =>
     headers: { Authorization: `Bearer ${guest.token}` },
   });
   assert.equal(guestProfile.current_order_items.find((item) => item.id === order.item.id)?.status, 'served');
+});
+
+test('iiko paid payment event closes guest visit and creates feedback request', async (t) => {
+  const webhookSecret = 'test-iiko-webhook-secret-2026';
+  const server = await startTestServer({
+    INITIAL_MANAGER_LOGIN: 'owner@example.test',
+    INITIAL_MANAGER_PASSWORD: 'OwnerTestPass-2026!',
+    DEMO_STAFF_PASSWORD: 'StaffTestPass-2026!',
+    IIKO_WEBHOOK_SECRET: webhookSecret,
+  });
+  t.after(server.stop);
+
+  const manager = await api(server.baseUrl, '/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ login: 'owner@example.test', password: 'OwnerTestPass-2026!' }),
+  });
+  const sync = await api(server.baseUrl, '/sync', {
+    headers: { Authorization: `Bearer ${manager.token}` },
+  });
+  const table = sync.tables.find((item) => item.checkin_token) ?? sync.tables[0];
+  assert.ok(table?.checkin_token);
+  await api(server.baseUrl, `/tables/${table.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${manager.token}` },
+    body: JSON.stringify({ status: 'free', expected_version: table.version }),
+  });
+
+  const guest = await api(server.baseUrl, '/guest/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'Payment Feedback Guest',
+      phone: '+7 900 444-55-66',
+      personal_data_consent: true,
+    }),
+  });
+  const checkIn = await api(server.baseUrl, '/guest/check-in', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${guest.token}` },
+    body: JSON.stringify({ token: table.checkin_token }),
+  });
+  assert.equal(checkIn.profile.current_table_session.table_id, table.id);
+
+  const dish = sync.menu_items.find((item) => item.status === 'available');
+  assert.ok(dish);
+  const order = await api(server.baseUrl, '/guest/orders/items', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${guest.token}` },
+    body: JSON.stringify({ menu_item_id: dish.id, quantity: 1 }),
+  });
+
+  const noSecret = await expectApiError(() =>
+    api(server.baseUrl, '/iiko/events/payment-paid', {
+      method: 'POST',
+      body: JSON.stringify({ local_order_id: order.order.id, amount: 1900 }),
+    }),
+  );
+  assert.equal(noSecret.status, 401);
+
+  const paid = await api(server.baseUrl, '/iiko/events/payment-paid', {
+    method: 'POST',
+    headers: { 'X-Gory-Iiko-Secret': webhookSecret },
+    body: JSON.stringify({
+      order_id: 'iiko-order-feedback-1',
+      payment_id: 'iiko-payment-feedback-1',
+      local_order_id: order.order.id,
+      table_session_id: checkIn.session.id,
+      guest_phone: '+7 900 444-55-66',
+      amount: 1900,
+      status: 'paid',
+    }),
+  });
+  assert.equal(paid.status, 'processed');
+  assert.equal(paid.matched, true);
+  assert.equal(paid.feedback_request.status, 'requested');
+  assert.ok(paid.notification_id);
+
+  const duplicate = await api(server.baseUrl, '/iiko/events/payment-paid', {
+    method: 'POST',
+    headers: { 'X-Gory-Iiko-Secret': webhookSecret },
+    body: JSON.stringify({
+      order_id: 'iiko-order-feedback-1',
+      payment_id: 'iiko-payment-feedback-1',
+      local_order_id: order.order.id,
+      table_session_id: checkIn.session.id,
+      guest_phone: '+7 900 444-55-66',
+      amount: 1900,
+      status: 'paid',
+    }),
+  });
+  assert.equal(duplicate.duplicate, true);
+
+  const profile = await api(server.baseUrl, '/guest/profile', {
+    headers: { Authorization: `Bearer ${guest.token}` },
+  });
+  assert.equal(profile.guest.visits_count, 1);
+  assert.equal(profile.guest.total_spent, 1900);
+  assert.equal(profile.guest.average_check, 1900);
+  assert.equal(profile.current_table_session, null);
+  assert.equal(profile.current_order_items.length, 0);
+  assert.equal(profile.feedback_requests[0].id, paid.feedback_request.id);
+  assert.equal(profile.notifications[0].type, 'visit_feedback_request');
+
+  const submitted = await api(server.baseUrl, `/guest/feedback/${paid.feedback_request.id}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${guest.token}` },
+    body: JSON.stringify({ rating: 5, comment: 'Everything was good' }),
+  });
+  assert.equal(submitted.status, 'submitted');
+  assert.equal(submitted.rating, 5);
+});
+
+test('guest bonus redemption is tied to the paid iiko order', async (t) => {
+  const webhookSecret = 'test-iiko-webhook-secret-redemption-2026';
+  const server = await startTestServer({
+    INITIAL_MANAGER_LOGIN: 'owner@example.test',
+    INITIAL_MANAGER_PASSWORD: 'OwnerTestPass-2026!',
+    DEMO_STAFF_PASSWORD: 'StaffTestPass-2026!',
+    IIKO_WEBHOOK_SECRET: webhookSecret,
+  });
+  t.after(server.stop);
+
+  const manager = await api(server.baseUrl, '/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ login: 'owner@example.test', password: 'OwnerTestPass-2026!' }),
+  });
+  const sync = await api(server.baseUrl, '/sync', {
+    headers: { Authorization: `Bearer ${manager.token}` },
+  });
+  const table = sync.tables.find((item) => item.checkin_token) ?? sync.tables[0];
+  assert.ok(table?.checkin_token);
+  await api(server.baseUrl, `/tables/${table.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${manager.token}` },
+    body: JSON.stringify({ status: 'free', expected_version: table.version }),
+  });
+
+  const guest = await api(server.baseUrl, '/guest/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'Bonus Redemption Guest',
+      phone: '+7 900 555-66-77',
+      personal_data_consent: true,
+    }),
+  });
+  assert.equal(guest.guest.bonus_balance, 300);
+  const checkIn = await api(server.baseUrl, '/guest/check-in', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${guest.token}` },
+    body: JSON.stringify({ token: table.checkin_token }),
+  });
+
+  const overLimit = await expectApiError(() =>
+    api(server.baseUrl, '/guest/bonus/redemptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${guest.token}` },
+      body: JSON.stringify({
+        amount: 250,
+        order_amount: 1000,
+        iiko_order_id: 'iiko-order-bonus-too-high',
+      }),
+    }),
+  );
+  assert.equal(overLimit.status, 400);
+
+  const redemption = await api(server.baseUrl, '/guest/bonus/redemptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${guest.token}` },
+    body: JSON.stringify({
+      amount: 120,
+      order_amount: 1500,
+      iiko_order_id: 'iiko-order-bonus-1',
+    }),
+  });
+  assert.equal(redemption.redemption.status, 'reserved');
+  assert.equal(redemption.redemption.amount, 120);
+  assert.equal(redemption.redemption.order_amount, 1500);
+  assert.equal(redemption.redemption.max_bonus_amount, 300);
+  assert.equal(redemption.redemption.iiko_order_id, 'iiko-order-bonus-1');
+  assert.equal(redemption.redemption.table_session_id, checkIn.session.id);
+  assert.equal(redemption.transaction.amount, -120);
+  assert.equal(redemption.guest.bonus_balance, 180);
+
+  const paid = await api(server.baseUrl, '/iiko/events/payment-paid', {
+    method: 'POST',
+    headers: { 'X-Gory-Iiko-Secret': webhookSecret },
+    body: JSON.stringify({
+      order_id: 'iiko-order-bonus-1',
+      payment_id: 'iiko-payment-bonus-1',
+      table_session_id: checkIn.session.id,
+      guest_phone: '+7 900 555-66-77',
+      amount: 1500,
+      status: 'paid',
+    }),
+  });
+  assert.equal(paid.status, 'processed');
+  assert.equal(paid.bonus_redemptions.length, 1);
+  assert.equal(paid.bonus_redemptions[0].id, redemption.redemption.id);
+  assert.equal(paid.bonus_redemptions[0].status, 'applied');
+  assert.equal(paid.bonus_redemptions[0].iiko_payment_event_id, paid.payment_event.id);
+
+  const transactions = await api(server.baseUrl, '/guest/bonus-transactions', {
+    headers: { Authorization: `Bearer ${guest.token}` },
+  });
+  const spend = transactions.items.find((item) => item.id === redemption.transaction.id);
+  assert.equal(spend.iiko_order_id, 'iiko-order-bonus-1');
+  assert.equal(spend.iiko_payment_event_id, paid.payment_event.id);
+});
+
+test('staff can redeem guest bonuses for an iiko order before payment is received', async (t) => {
+  const webhookSecret = 'test-iiko-webhook-secret-staff-redemption-2026';
+  const server = await startTestServer({
+    INITIAL_MANAGER_LOGIN: 'owner@example.test',
+    INITIAL_MANAGER_PASSWORD: 'OwnerTestPass-2026!',
+    DEMO_STAFF_PASSWORD: 'StaffTestPass-2026!',
+    IIKO_WEBHOOK_SECRET: webhookSecret,
+  });
+  t.after(server.stop);
+
+  const manager = await api(server.baseUrl, '/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ login: 'owner@example.test', password: 'OwnerTestPass-2026!' }),
+  });
+  const sync = await api(server.baseUrl, '/sync', {
+    headers: { Authorization: `Bearer ${manager.token}` },
+  });
+  const table = sync.tables.find((item) => item.checkin_token) ?? sync.tables[0];
+  assert.ok(table?.checkin_token);
+  await api(server.baseUrl, `/tables/${table.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${manager.token}` },
+    body: JSON.stringify({ status: 'free', expected_version: table.version }),
+  });
+
+  const guest = await api(server.baseUrl, '/guest/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'Staff Redemption Guest',
+      phone: '+7 900 555-66-88',
+      personal_data_consent: true,
+    }),
+  });
+  const checkIn = await api(server.baseUrl, '/guest/check-in', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${guest.token}` },
+    body: JSON.stringify({ token: table.checkin_token }),
+  });
+
+  const missingOrderLink = await expectApiError(() =>
+    api(server.baseUrl, `/admin/guests/${guest.guest.id}/bonus-redemptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${manager.token}` },
+      body: JSON.stringify({
+        amount: 20,
+        order_amount: 400,
+        table_session_id: checkIn.session.id,
+      }),
+    }),
+  );
+  assert.equal(missingOrderLink.status, 400);
+
+  const redemption = await api(server.baseUrl, `/admin/guests/${guest.guest.id}/bonus-redemptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${manager.token}` },
+    body: JSON.stringify({
+      amount: 90,
+      order_amount: 1600,
+      table_session_id: checkIn.session.id,
+      iiko_order_id: 'iiko-order-staff-bonus-1',
+    }),
+  });
+  assert.equal(redemption.redemption.status, 'reserved');
+  assert.equal(redemption.redemption.amount, 90);
+  assert.equal(redemption.redemption.order_amount, 1600);
+  assert.equal(redemption.redemption.max_bonus_amount, 320);
+  assert.equal(redemption.transaction.created_by, manager.user.id);
+  assert.equal(redemption.transaction.source, 'staff_iiko_payment');
+  assert.equal(redemption.guest.bonus_balance, 210);
+
+  const staffSync = await api(server.baseUrl, '/sync?mobile=1', {
+    headers: { Authorization: `Bearer ${manager.token}`, 'X-Gory-App': 'mobile' },
+  });
+  assert.ok(Array.isArray(staffSync.guest_bonus_redemptions));
+  const syncedRedemption = staffSync.guest_bonus_redemptions.find((item) => item.id === redemption.redemption.id);
+  assert.equal(syncedRedemption.iiko_order_id, 'iiko-order-staff-bonus-1');
+  assert.equal(syncedRedemption.table_session_id, checkIn.session.id);
+  assert.equal(syncedRedemption.status, 'reserved');
+  assert.equal(syncedRedemption.order_amount, 1600);
+  assert.equal(syncedRedemption.max_bonus_amount, 320);
+
+  const paid = await api(server.baseUrl, '/iiko/events/payment-paid', {
+    method: 'POST',
+    headers: { 'X-Gory-Iiko-Secret': webhookSecret },
+    body: JSON.stringify({
+      order_id: 'iiko-order-staff-bonus-1',
+      payment_id: 'iiko-payment-staff-bonus-1',
+      table_session_id: checkIn.session.id,
+      guest_phone: '+7 900 555-66-88',
+      amount: 1600,
+      status: 'paid',
+    }),
+  });
+  assert.equal(paid.bonus_redemptions.length, 1);
+  assert.equal(paid.bonus_redemptions[0].id, redemption.redemption.id);
+  assert.equal(paid.bonus_redemptions[0].status, 'applied');
+});
+
+test('imported iiko pos order links bonus redemption to payment by order id only', async (t) => {
+  const webhookSecret = 'test-iiko-webhook-secret-imported-order-2026';
+  const server = await startTestServer({
+    INITIAL_MANAGER_LOGIN: 'owner@example.test',
+    INITIAL_MANAGER_PASSWORD: 'OwnerTestPass-2026!',
+    DEMO_STAFF_PASSWORD: 'StaffTestPass-2026!',
+    IIKO_WEBHOOK_SECRET: webhookSecret,
+  });
+  t.after(server.stop);
+
+  const manager = await api(server.baseUrl, '/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ login: 'owner@example.test', password: 'OwnerTestPass-2026!' }),
+  });
+  const sync = await api(server.baseUrl, '/sync', {
+    headers: { Authorization: `Bearer ${manager.token}` },
+  });
+  const table = sync.tables.find((item) => item.checkin_token) ?? sync.tables[0];
+  assert.ok(table?.checkin_token);
+  await api(server.baseUrl, `/tables/${table.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${manager.token}` },
+    body: JSON.stringify({ status: 'free', expected_version: table.version }),
+  });
+
+  const guest = await api(server.baseUrl, '/guest/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: 'Imported Iiko Order Guest',
+      phone: '+7 900 555-66-99',
+      personal_data_consent: true,
+    }),
+  });
+  const checkIn = await api(server.baseUrl, '/guest/check-in', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${guest.token}` },
+    body: JSON.stringify({ token: table.checkin_token }),
+  });
+
+  const imported = await api(server.baseUrl, '/iiko/events/order-updated', {
+    method: 'POST',
+    headers: { 'X-Gory-Iiko-Secret': webhookSecret },
+    body: JSON.stringify({
+      order_id: 'iiko-pos-order-1',
+      order_number: 'POS-77',
+      table_number: table.number,
+      amount: 2200,
+      status: 'open',
+    }),
+  });
+  assert.equal(imported.status, 'processed');
+  assert.equal(imported.matched, true);
+  assert.equal(imported.order.iiko_order_id, 'iiko-pos-order-1');
+  assert.equal(imported.order.guest_id, guest.guest.id);
+  assert.equal(imported.order.table_session_id, checkIn.session.id);
+  assert.equal(imported.order.amount, 2200);
+
+  const staffSync = await api(server.baseUrl, '/sync?mobile=1', {
+    headers: { Authorization: `Bearer ${manager.token}`, 'X-Gory-App': 'mobile' },
+  });
+  assert.ok(Array.isArray(staffSync.iiko_external_orders));
+  const syncedOrder = staffSync.iiko_external_orders.find((item) => item.iiko_order_id === 'iiko-pos-order-1');
+  assert.equal(syncedOrder.guest_id, guest.guest.id);
+  assert.equal(syncedOrder.table_session_id, checkIn.session.id);
+  assert.equal(syncedOrder.amount, 2200);
+
+  const redemption = await api(server.baseUrl, `/admin/guests/${guest.guest.id}/bonus-redemptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${manager.token}` },
+    body: JSON.stringify({
+      amount: 200,
+      order_amount: 2200,
+      table_session_id: checkIn.session.id,
+      iiko_order_id: 'iiko-pos-order-1',
+    }),
+  });
+  assert.equal(redemption.redemption.status, 'reserved');
+
+  const paid = await api(server.baseUrl, '/iiko/events/payment-paid', {
+    method: 'POST',
+    headers: { 'X-Gory-Iiko-Secret': webhookSecret },
+    body: JSON.stringify({
+      order_id: 'iiko-pos-order-1',
+      payment_id: 'iiko-pos-payment-1',
+      amount: 2200,
+      status: 'paid',
+    }),
+  });
+  assert.equal(paid.status, 'processed');
+  assert.equal(paid.matched, true);
+  assert.equal(paid.payment_event.guest_id, guest.guest.id);
+  assert.equal(paid.payment_event.table_session_id, checkIn.session.id);
+  assert.equal(paid.bonus_redemptions.length, 1);
+  assert.equal(paid.bonus_redemptions[0].id, redemption.redemption.id);
+  assert.equal(paid.bonus_redemptions[0].status, 'applied');
 });
 
 test('server refuses to start without separate guest jwt secret', async () => {

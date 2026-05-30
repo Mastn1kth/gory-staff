@@ -1179,6 +1179,131 @@ export function AnnouncementsScreen({ snapshot, onMutate }: SectionProps) {
   );
 }
 
+export function SmmScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    title: '',
+    body: '',
+    status: 'published',
+    mediaUrl: '',
+    mediaType: 'image',
+    thumbnailUrl: '',
+  });
+  const [importMessage, setImportMessage] = useState('');
+  const posts = [...(snapshot.social_posts ?? [])].sort((a, b) =>
+    String(b.published_at ?? b.created_at).localeCompare(String(a.published_at ?? a.created_at)),
+  );
+  const mediaByPost = new Map<string, NonNullable<DataSnapshot['social_post_media']>>();
+  for (const media of snapshot.social_post_media ?? []) {
+    const items = mediaByPost.get(media.post_id) ?? [];
+    items.push(media);
+    mediaByPost.set(media.post_id, items);
+  }
+  const commentsByPost = new Map<string, number>();
+  for (const comment of snapshot.social_post_comments ?? []) {
+    if (comment.status !== 'visible') continue;
+    commentsByPost.set(comment.post_id, (commentsByPost.get(comment.post_id) ?? 0) + 1);
+  }
+
+  return (
+    <ScreenScroll>
+      <View style={styles.actionGrid}>
+        <SecondaryButton title="Создать новость" compact onPress={() => setShowForm(true)} />
+        <SecondaryButton
+          title="Импорт Instagram/VK"
+          compact
+          onPress={async () => {
+            const result = await onMutate('POST', '/social/import/run', { sources: ['instagram', 'vk'] });
+            const sources = Array.isArray((result as { sources?: unknown[] } | null)?.sources)
+              ? ((result as { sources: Array<{ source: string; status: string; missing?: string[]; imported_count?: number }> }).sources)
+              : [];
+            setImportMessage(
+              sources
+                .map((item) =>
+                  item.status === 'disabled'
+                    ? `${item.source}: нужны ключи ${item.missing?.join(', ') ?? ''}`
+                    : `${item.source}: ${item.imported_count ?? 0} постов`,
+                )
+                .join('\n') || 'Импорт запущен',
+            );
+            await onRefresh();
+          }}
+        />
+      </View>
+      {importMessage ? <Text style={styles.mutedText}>{importMessage}</Text> : null}
+      {posts.length ? (
+        posts.map((post) => {
+          const media = mediaByPost.get(post.id) ?? [];
+          const firstMedia = media[0];
+          return (
+            <Card key={post.id}>
+              <View style={styles.rowBetween}>
+                <View style={styles.flex}>
+                  <Text style={styles.cardTitle}>{post.title}</Text>
+                  <Text style={styles.mutedText}>
+                    {post.source} · {shortDateTime(post.published_at ?? post.created_at)}
+                  </Text>
+                </View>
+                <Pill label={post.status} tone={post.status === 'published' ? 'good' : post.status === 'hidden' ? 'bad' : 'warn'} />
+              </View>
+              {firstMedia?.url ? (
+                <Image source={{ uri: firstMedia.thumbnail_url ?? firstMedia.url }} style={smmStyles.preview} />
+              ) : null}
+              <Text style={styles.bodyText}>{post.body}</Text>
+              <View style={styles.categoryRow}>
+                <Pill label={`${media.length} медиа`} tone="neutral" />
+                <Pill label={`${commentsByPost.get(post.id) ?? 0} комментариев`} tone="info" />
+              </View>
+            </Card>
+          );
+        })
+      ) : (
+        <EmptyState title="Новостей пока нет" text="Создайте первый пост или подключите импорт из соцсетей." />
+      )}
+      <ModalSheet visible={showForm} title="Новость для гостей" onClose={() => setShowForm(false)}>
+        <Field label="Заголовок" value={form.title} onChangeText={(value) => setForm({ ...form, title: value })} />
+        <Field label="Текст" value={form.body} onChangeText={(value) => setForm({ ...form, body: value })} multiline />
+        <Field label="Статус" value={form.status} onChangeText={(value) => setForm({ ...form, status: value })} />
+        <Field label="Ссылка на фото/видео" value={form.mediaUrl} onChangeText={(value) => setForm({ ...form, mediaUrl: value })} />
+        <Field label="Тип медиа" value={form.mediaType} onChangeText={(value) => setForm({ ...form, mediaType: value })} />
+        <Field label="Превью для видео" value={form.thumbnailUrl} onChangeText={(value) => setForm({ ...form, thumbnailUrl: value })} />
+        <PrimaryButton
+          title="Опубликовать"
+          onPress={async () => {
+            await onMutate('POST', '/social/posts', {
+              title: form.title,
+              body: form.body,
+              status: form.status,
+              media: form.mediaUrl
+                ? [
+                    {
+                      media_type: form.mediaType === 'video' ? 'video' : 'image',
+                      url: form.mediaUrl,
+                      thumbnail_url: form.thumbnailUrl || null,
+                    },
+                  ]
+                : [],
+            });
+            setShowForm(false);
+            setForm({ title: '', body: '', status: 'published', mediaUrl: '', mediaType: 'image', thumbnailUrl: '' });
+            await onRefresh();
+          }}
+        />
+      </ModalSheet>
+    </ScreenScroll>
+  );
+}
+
+const smmStyles = StyleSheet.create({
+  preview: {
+    width: '100%',
+    height: 180,
+    borderRadius: 8,
+    marginTop: 12,
+    backgroundColor: '#ECE6DA',
+  },
+});
+
 export function AnnouncementCard({ announcement, snapshot }: { announcement: Announcement; snapshot: DataSnapshot }) {
   return (
     <Card>

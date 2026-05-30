@@ -5,6 +5,7 @@ export type RoleName =
   | 'owner'
   | 'manager'
   | 'administrator'
+  | 'smm_manager'
   | 'hostess'
   | 'waiter'
   | 'chef'
@@ -33,6 +34,7 @@ export type SectionKey =
   | 'profile'
   | 'admin'
   | 'analytics'
+  | 'smm'
   | 'about';
 
 export type ApiSession = {
@@ -82,6 +84,17 @@ export type GuestOrder = {
   guest_id: string;
   guest_name?: string;
   status: 'open' | 'closed' | 'cancelled' | string;
+  iiko_order_id?: string | null;
+  iiko_correlation_id?: string | null;
+  iiko_creation_status?: string | null;
+  iiko_order_status?: string | null;
+  iiko_order_number?: number | null;
+  iiko_order_sum?: number | null;
+  iiko_order_closed_at?: string | null;
+  iiko_order_payload_json?: Record<string, unknown> | null;
+  iiko_sync_status?: string | null;
+  iiko_sync_error?: string | null;
+  iiko_synced_at?: string | null;
   created_at: string;
   updated_at: string;
   version?: number;
@@ -104,9 +117,29 @@ export type GuestOrderItem = {
   status: 'ordered' | 'accepted' | 'in_progress' | 'done' | 'served' | 'cancelled' | string;
   assigned_to?: string | null;
   comment?: string | null;
+  iiko_position_id?: string | null;
+  iiko_sync_status?: string | null;
+  iiko_sync_error?: string | null;
+  iiko_synced_at?: string | null;
+  modifiers?: GuestOrderItemModifier[];
   created_at: string;
   updated_at: string;
   version?: number;
+};
+
+export type GuestOrderItemModifier = {
+  id: string;
+  order_item_id: string;
+  menu_item_modifier_id?: string | null;
+  modifier_group_id?: string | null;
+  iiko_modifier_product_id: string;
+  iiko_modifier_group_id?: string | null;
+  name: string;
+  amount: number;
+  price: number;
+  iiko_position_id?: string | null;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type MenuRestoredAlert = {
@@ -192,6 +225,42 @@ export type MenuItem = {
   version?: number;
 };
 
+export type MenuItemModifierGroup = {
+  id: string;
+  menu_item_id: string;
+  name: string;
+  iiko_modifier_group_id?: string | null;
+  iiko_modifier_schema_id?: string | null;
+  required: boolean;
+  min_amount?: number | null;
+  max_amount?: number | null;
+  sort_order: number;
+  status: 'active' | 'archived' | string;
+  iiko_payload_json?: Record<string, unknown>;
+  iiko_last_seen_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type MenuItemModifier = {
+  id: string;
+  modifier_group_id: string;
+  iiko_modifier_product_id?: string | null;
+  name: string;
+  price: number;
+  min_amount?: number | null;
+  max_amount?: number | null;
+  default_amount?: number | null;
+  free_of_charge_amount?: number | null;
+  hide_if_default_amount: boolean;
+  sort_order: number;
+  status: 'active' | 'archived' | string;
+  iiko_payload_json?: Record<string, unknown>;
+  iiko_last_seen_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type StopListItem = {
   id: string;
   menu_item_id: string;
@@ -235,6 +304,7 @@ export type RestaurantTable = {
   shape: 'round' | 'square' | 'rect';
   status: TableStatus;
   current_waiter_id?: string | null;
+  iiko_table_id?: string | null;
   comment?: string | null;
   updated_at?: string;
   version?: number;
@@ -375,8 +445,65 @@ export type GuestBonusTransaction = {
   source: string;
   related_guest_id?: string | null;
   related_visit_id?: string | null;
+  iiko_order_id?: string | null;
+  iiko_payment_event_id?: string | null;
+  local_order_id?: string | null;
+  table_session_id?: string | null;
   created_by?: string | null;
   created_at: string;
+};
+
+export type GuestBonusRedemption = {
+  id: string;
+  guest_id: string;
+  table_session_id?: string | null;
+  local_order_id?: string | null;
+  iiko_order_id?: string | null;
+  iiko_payment_event_id?: string | null;
+  bonus_transaction_id?: string | null;
+  amount: number;
+  order_amount?: number;
+  max_bonus_amount?: number;
+  bonus_to_ruble_rate?: number;
+  status: 'reserved' | 'applied' | 'cancelled' | string;
+  reason?: string | null;
+  created_at: string;
+  updated_at?: string;
+  applied_at?: string | null;
+  cancelled_at?: string | null;
+};
+
+export type IikoExternalOrder = {
+  id: string;
+  iiko_order_id: string;
+  iiko_order_number?: string | null;
+  iiko_terminal_group_id?: string | null;
+  iiko_organization_id?: string | null;
+  iiko_table_id?: string | null;
+  table_id?: string | null;
+  table_number?: string | null;
+  table_session_id?: string | null;
+  guest_id?: string | null;
+  guest_phone?: string | null;
+  amount: number;
+  status: string;
+  first_seen_at?: string;
+  updated_at?: string;
+  closed_at?: string | null;
+};
+
+export type GuestFeedbackRequest = {
+  id: string;
+  guest_id: string;
+  iiko_payment_event_id?: string | null;
+  table_session_id?: string | null;
+  local_order_id?: string | null;
+  rating?: number | null;
+  comment?: string | null;
+  status: 'requested' | 'submitted' | string;
+  notification_id?: string | null;
+  requested_at: string;
+  responded_at?: string | null;
 };
 
 export type GuestReferralSummary = {
@@ -394,6 +521,8 @@ export type GuestProfilePayload = {
   notifications?: NotificationItem[];
   current_table_session?: (TableGuestSession & { table_number?: string }) | null;
   current_order_items?: GuestOrderItem[];
+  feedback_requests?: GuestFeedbackRequest[];
+  bonus_redemptions?: GuestBonusRedemption[];
   offers?: { id: string; title: string; text: string }[];
 };
 
@@ -450,6 +579,41 @@ export type Announcement = {
   author_id: string;
   target_role: string;
   importance: 'normal' | 'important' | 'urgent';
+  created_at: string;
+};
+
+export type SocialPostMedia = {
+  id: string;
+  post_id: string;
+  media_type: 'image' | 'video' | string;
+  url: string;
+  thumbnail_url?: string | null;
+  sort_order?: number;
+  created_at?: string;
+};
+
+export type SocialPost = {
+  id: string;
+  title: string;
+  body: string;
+  source: 'manual' | 'instagram' | 'vk' | string;
+  source_url?: string | null;
+  author_id?: string | null;
+  author_name?: string | null;
+  status: 'draft' | 'published' | 'hidden' | string;
+  published_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+  version?: number;
+};
+
+export type SocialPostComment = {
+  id: string;
+  post_id: string;
+  guest_id: string;
+  guest_name?: string;
+  text: string;
+  status: string;
   created_at: string;
 };
 
@@ -630,6 +794,8 @@ export type DataSnapshot = {
   shifts: Shift[];
   menu_categories: MenuCategory[];
   menu_items: MenuItem[];
+  menu_item_modifier_groups?: MenuItemModifierGroup[];
+  menu_item_modifiers?: MenuItemModifier[];
   notebook_notes: NotebookNote[];
   stop_list: StopListItem[];
   floors: Floor[];
@@ -649,10 +815,16 @@ export type DataSnapshot = {
   guest_notes: GuestNote[];
   guest_clients?: GuestUser[];
   guest_client_transactions?: GuestBonusTransaction[];
+  guest_bonus_redemptions?: GuestBonusRedemption[];
+  iiko_external_orders?: IikoExternalOrder[];
   shift_checklist: ShiftChecklistItem[];
   supply_requests: SupplyRequest[];
   guest_orders?: GuestOrder[];
   guest_order_items?: GuestOrderItem[];
+  guest_order_item_modifiers?: GuestOrderItemModifier[];
+  social_posts?: SocialPost[];
+  social_post_media?: SocialPostMedia[];
+  social_post_comments?: SocialPostComment[];
   hall_signals?: HallSignal[];
   table_guest_sessions?: TableGuestSession[];
   menu_restored_alerts?: MenuRestoredAlert[];

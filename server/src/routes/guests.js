@@ -23,10 +23,27 @@ function registerGuestRoutes(app, deps) {
     getCoordinationApi,
   } = deps;
 
+  function redemptionOrderAmount(body) {
+    const value = Number(body?.order_amount ?? body?.orderAmount ?? body?.order_sum ?? body?.orderSum ?? body?.payment_amount ?? body?.paymentAmount ?? 0);
+    if (!Number.isFinite(value) || value <= 0) throw httpError('Передайте сумму заказа для расчета лимита списания.', 400);
+    return Math.round(value);
+  }
+
+  function maxRedemptionAmount(orderAmount) {
+    return Math.floor(Number(orderAmount) * 0.2);
+  }
+
+  function validateRedemptionLimit(amount, orderAmount) {
+    const maxAmount = maxRedemptionAmount(orderAmount);
+    if (maxAmount <= 0) throw httpError('Для этого заказа нельзя списать бонусы.', 400);
+    if (amount > maxAmount) throw httpError('Можно списать не больше 20% от суммы заказа. 1 балл = 1 рубль.', 400);
+    return maxAmount;
+  }
+
   app.get(
     '/guest/menu',
     asyncHandler(async (_req, res) => {
-      const [categories, items] = await Promise.all([
+      const [categories, items, modifierGroups, modifiers] = await Promise.all([
         query('SELECT id, name, sort_order FROM menu_categories ORDER BY sort_order ASC, name ASC'),
         query(
           `SELECT
@@ -49,6 +66,38 @@ function registerGuestRoutes(app, deps) {
            JOIN menu_categories mc ON mc.id = mi.category_id
            ORDER BY mc.sort_order ASC, mi.popularity DESC, mi.name ASC`,
         ),
+        query(
+          `SELECT
+             mig.id,
+             mig.menu_item_id,
+             mig.name,
+             mig.iiko_modifier_group_id,
+             mig.required,
+             mig.min_amount,
+             mig.max_amount,
+             mig.sort_order
+           FROM menu_item_modifier_groups mig
+           JOIN menu_items mi ON mi.id = mig.menu_item_id
+           WHERE mig.status = 'active'
+           ORDER BY mig.menu_item_id, mig.sort_order ASC, mig.name ASC`,
+        ),
+        query(
+          `SELECT
+             mim.id,
+             mim.modifier_group_id,
+             mim.iiko_modifier_product_id,
+             mim.name,
+             mim.price,
+             mim.min_amount,
+             mim.max_amount,
+             mim.default_amount,
+             mim.sort_order
+           FROM menu_item_modifiers mim
+           JOIN menu_item_modifier_groups mig ON mig.id = mim.modifier_group_id
+           WHERE mim.status = 'active'
+             AND mig.status = 'active'
+           ORDER BY mim.modifier_group_id, mim.sort_order ASC, mim.name ASC`,
+        ),
       ]);
 
       res.json({
@@ -58,6 +107,8 @@ function registerGuestRoutes(app, deps) {
           is_available: item.status === 'available',
           guest_status_text: item.status === 'available' ? null : 'Временно недоступно',
         })),
+        modifier_groups: modifierGroups.rows,
+        modifiers: modifiers.rows,
       });
     }),
   );
@@ -304,6 +355,100 @@ function registerGuestRoutes(app, deps) {
     }),
   );
 
+  app.post(
+    '/guest/bonus/redemptions',
+    guestAuthMiddleware,
+    asyncHandler(async (req, res) => {
+      const amount = Math.round(Number(req.body?.amount ?? 0));
+      if (!Number.isFinite(amount) || amount <= 0) throw httpError('Введите сумму бонусов для списания.', 400);
+      const orderAmount = redemptionOrderAmount(req.body ?? {});
+      const maxBonusAmount = validateRedemptionLimit(amount, orderAmount);
+
+      const iikoOrderId = String(req.body?.iiko_order_id ?? req.body?.iikoOrderId ?? '').trim() || null;
+      const localOrderId = String(req.body?.local_order_id ?? req.body?.localOrderId ?? '').trim() || null;
+      if (!iikoOrderId && !localOrderId) {
+        throw httpError('Передайте iiko_order_id или local_order_id для связи списания с оплачиваемым заказом.', 400);
+      }
+      const reason = String(req.body?.reason ?? 'Списание бонусов к заказу iiko').trim();
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const session = (
+          await client.query(
+            `SELECT *
+             FROM table_guest_sessions
+             WHERE guest_id = $1 AND status = 'active'
+             ORDER BY checked_in_at DESC
+             LIMIT 1`,
+            [req.guest.id],
+          )
+        ).rows[0];
+        if (!session) throw httpError('Сначала привяжитесь к столу.', 400);
+
+        if (localOrderId) {
+          const order = (
+            await client.query(
+              `SELECT id
+               FROM guest_orders
+               WHERE id = $1
+                 AND guest_id = $2
+                 AND (table_session_id = $3 OR table_session_id IS NULL)
+               LIMIT 1`,
+              [localOrderId, req.guest.id, session.id],
+            )
+          ).rows[0];
+          if (!order) throw httpError('Заказ не найден для текущего гостя.', 404);
+        }
+
+        const transaction = await addGuestBonusTransaction(client, {
+          guestId: req.guest.id,
+          type: 'iiko_bonus_redeem',
+          amount: -amount,
+          reason,
+          source: 'iiko_payment',
+          relatedVisitId: session.id,
+          iikoOrderId,
+          localOrderId,
+          tableSessionId: session.id,
+        });
+
+        const redemption = (
+          await client.query(
+            `INSERT INTO guest_bonus_redemptions
+               (id, guest_id, table_session_id, local_order_id, iiko_order_id,
+                bonus_transaction_id, amount, order_amount, max_bonus_amount, bonus_to_ruble_rate,
+                status, reason, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,'reserved',$10,NOW(),NOW())
+             RETURNING *`,
+            [
+              randomUUID(),
+              req.guest.id,
+              session.id,
+              localOrderId,
+              iikoOrderId,
+              transaction.id,
+              amount,
+              orderAmount,
+              maxBonusAmount,
+              reason,
+            ],
+          )
+        ).rows[0];
+        const payload = await buildGuestPayload(client, req.guest.id);
+        await client.query('COMMIT');
+        emitChange('guest_users', 'updated', payload.guest);
+        emitChange('guest_bonus_redemptions', 'created', redemption);
+        res.status(201).json({ redemption, transaction, guest: payload.guest });
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
   app.get(
     '/guest/referral',
     guestAuthMiddleware,
@@ -398,6 +543,65 @@ function registerGuestRoutes(app, deps) {
       );
       if (!result.rows[0]) throw httpError('Гость не найден.', 404);
       res.json(result.rows[0]);
+    }),
+  );
+
+  app.post(
+    '/guest/feedback/:id',
+    guestAuthMiddleware,
+    asyncHandler(async (req, res) => {
+      const rating = Number(req.body?.rating);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        throw httpError('Оценка должна быть числом от 1 до 5.', 400);
+      }
+      const comment = String(req.body?.comment ?? '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const current = (
+          await client.query(
+            `SELECT *
+             FROM guest_feedback_requests
+             WHERE id = $1 AND guest_id = $2
+             LIMIT 1`,
+            [req.params.id, req.guest.id],
+          )
+        ).rows[0];
+        if (!current) throw httpError('Запрос оценки не найден.', 404);
+        if (current.status === 'submitted') throw httpError('Оценка уже отправлена.', 409);
+
+        const updated = (
+          await client.query(
+            `UPDATE guest_feedback_requests
+             SET rating = $3,
+                 comment = $4,
+                 status = 'submitted',
+                 responded_at = NOW()
+             WHERE id = $1 AND guest_id = $2
+             RETURNING *`,
+            [req.params.id, req.guest.id, rating, comment || null],
+          )
+        ).rows[0];
+
+        if (rating <= 3) {
+          await createRoleNotifications(client, ['management'], {
+            title: 'Низкая оценка визита',
+            text: `${req.guest.name}: ${rating}/5${comment ? ` - ${comment}` : ''}`,
+            type: 'guest_feedback_low',
+            data: { feedback_request_id: updated.id, guest_id: req.guest.id, rating },
+          });
+        }
+
+        await client.query('COMMIT');
+        emitChange('guest_feedback_requests', 'updated', updated);
+        res.json(updated);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     }),
   );
 }

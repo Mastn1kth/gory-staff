@@ -118,6 +118,7 @@ if not exist "node_modules" (
 )
 
 echo Updating server settings...
+echo Preserving IIKO_WEBHOOK_SECRET and other IIKO_* settings from server\.env if they already exist.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$path='server\.env';" ^
@@ -129,7 +130,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$managerLogin=([string]$existing.INITIAL_MANAGER_LOGIN).Trim(); if ([string]::IsNullOrWhiteSpace($managerLogin)) { $managerLogin='owner@gory.local' };" ^
   "$managerPassword=([string]$existing.INITIAL_MANAGER_PASSWORD).Trim(); if ([string]::IsNullOrWhiteSpace($managerPassword)) { $managerPassword=& $newSecret 18 };" ^
   "$staffPassword=([string]$existing.DEMO_STAFF_PASSWORD).Trim(); if ([string]::IsNullOrWhiteSpace($staffPassword)) { $staffPassword=& $newSecret 18 };" ^
+  "$coreKeys=@('DATABASE_URL','PORT','JWT_SECRET','GUEST_JWT_SECRET','PUBLIC_SERVER_URL','EXPO_PUBLIC_API_URL','CORS_ORIGINS','INITIAL_MANAGER_LOGIN','INITIAL_MANAGER_PASSWORD','DEMO_STAFF_PASSWORD','SEED_DEMO_DATA');" ^
   "$lines=@('DATABASE_URL=postgres://gory:gory@localhost:5432/gory_staff','PORT=4000',('JWT_SECRET=' + $secret),('GUEST_JWT_SECRET=' + $guestSecret),('PUBLIC_SERVER_URL=' + $public),('EXPO_PUBLIC_API_URL=' + $public),('CORS_ORIGINS=' + $public),('INITIAL_MANAGER_LOGIN=' + $managerLogin),('INITIAL_MANAGER_PASSWORD=' + $managerPassword),('DEMO_STAFF_PASSWORD=' + $staffPassword),'SEED_DEMO_DATA=if-empty');" ^
+  "$preservedKeys=@($existing.Keys | Where-Object { $coreKeys -notcontains $_ } | Sort-Object); foreach ($key in $preservedKeys) { $lines += ($key + '=' + [string]$existing[$key]) };" ^
   "[IO.File]::WriteAllLines($path, $lines, [Text.UTF8Encoding]::new($false))"
 if errorlevel 1 (
   echo Could not update server\.env.
@@ -263,6 +266,15 @@ if errorlevel 1 (
   echo Server start failed.
   if not "%GORY_CONTROL_NO_PAUSE%"=="1" pause
   exit /b 1
+)
+
+echo.
+echo Starting iiko event connector...
+call "tools\bat\START_IIKO_EVENT_CONNECTOR.bat"
+if errorlevel 1 (
+  echo iiko event connector did not start. Check runtime\logs\iiko-event-connector.err.log.
+) else (
+  echo iiko event connector started.
 )
 
 echo.

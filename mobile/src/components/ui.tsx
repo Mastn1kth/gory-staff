@@ -444,13 +444,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   sectionTitle: {
-    color: palette.textOnDark,
+    color: palette.ink,
     fontSize: 22,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   sectionSubtitle: {
     marginTop: 4,
-    color: palette.textMutedOnDark,
+    color: palette.inkMuted,
     fontSize: 14,
     lineHeight: 20,
   },

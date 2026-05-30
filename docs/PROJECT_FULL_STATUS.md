@@ -14,9 +14,10 @@
 
 ## Батники
 
-- `START_GORY_STAFF.bat` запускает Docker, PostgreSQL, backend, публичный HTTPS relay и проверяет адреса.
-- `STOP_GORY_STAFF.bat` останавливает сервер, PostgreSQL-контейнер, публичный relay, Metro/Expo и Gradle daemons.
+- `START_GORY_STAFF.bat` запускает Docker, PostgreSQL, backend, публичный HTTPS relay, iiko event connector и проверяет адреса.
+- `STOP_GORY_STAFF.bat` останавливает сервер, PostgreSQL-контейнер, публичный relay, iiko event connector, Metro/Expo и Gradle daemons.
 - `START_PUBLIC_RELAY.bat` запускает исходящую связь компьютера ресторана с Cloudflare для домена `https://app.gory-staff.ru`.
+- `START_IIKO_EVENT_CONNECTOR.bat` запускает локальный iiko event connector в watch-режиме: события читаются из `runtime\iiko\events`, секрет берется из `server\.env`, логи пишутся в `runtime\logs`.
 - `BUILD_ANDROID_APK.bat` собирает свежий Android APK локально через Android Studio / Gradle.
 
 ## Android APK
@@ -174,8 +175,31 @@
 - Оплата.
 - Apple Pay / Google Pay.
 - Интеграция с кассой.
-- iiko / r_keeper.
-- SMS-подтверждение.
+- r_keeper.
+
+## Интеграция с iikoCloud
+
+- Добавлена синхронизация с iikoCloud: ручная синхронизация категорий, блюд, цен, стоп-листа и данных модификаторов в PostgreSQL, отправка гостевых заказов в iiko table orders и ручное подтягивание статуса конкретного iiko-заказа обратно в локальную БД.
+- Настройка только через `server\.env`: обязательные `IIKO_ENABLED`, `IIKO_API_LOGIN`, `IIKO_ORGANIZATION_ID`; для order sync также нужен `IIKO_TERMINAL_GROUP_ID`; опциональные `IIKO_API_BASE`, `IIKO_ORDER_SYNC_ENABLED`, `IIKO_ORDER_STATUS_SYNC_ENABLED`, `IIKO_ORDER_STATUS_SYNC_INTERVAL_SECONDS`, `IIKO_ORDER_STATUS_SYNC_LIMIT`, `IIKO_SOURCE_KEY`, `IIKO_SERVICE_PRINT`, `IIKO_CHECK_STOP_LIST`, `IIKO_TRANSPORT_TIMEOUT_SECONDS`, `IIKO_WEBHOOK_SECRET`.
+- Синхронизация выключена, если `IIKO_ENABLED` не равен `true` или не задан `IIKO_API_LOGIN`; без `IIKO_ORGANIZATION_ID` sync не может успешно загрузить меню, без `IIKO_TERMINAL_GROUP_ID` не может отправлять заказы.
+- Данные iiko хранятся через внешние `iiko_id` в `menu_categories`, `menu_items` и служебные поля стоп-листа.
+- Повторный запуск sync обновляет существующие записи по `iiko_id`, а не создает дубли.
+- Блюда, пропавшие из ответа iiko, получают `status = 'archived'`, но не удаляются.
+- iiko-модификаторы хранятся отдельно от обычного меню в `menu_item_modifier_groups` и `menu_item_modifiers`; группы/позиции, исчезнувшие из nomenclature, получают `status = 'archived'`.
+- Локальные поля меню, которых нет в iiko, не затираются: подсказки официанту, рекомендации, себестоимость и ручные служебные поля остаются локальными.
+- Доступны admin endpoints `GET /iiko/status`, `POST /iiko/sync/menu`, `POST /iiko/sync/orders/:orderId`, `POST /iiko/sync/orders/:orderId/status` и `POST /iiko/sync/orders/statuses`; нужна staff-авторизация и доступ `manage:menu`.
+- `GET /iiko/status` показывает расширенную диагностику: включение интеграции, обязательные env, отсутствующие env, замаскированный `IIKO_API_LOGIN`, organization/terminal group, последний menu sync, последний order sync, счетчики категорий/позиций/заказных позиций и последнюю ошибку.
+- Результаты menu sync пишутся в `iiko_sync_log`; результаты order sync пишутся в `iiko_order_sync_log`; успешный sync в ручном endpoint остается `completed`, а в диагностике `/iiko/status` отображается как `success`.
+- При гостевом заказе сервер создает заказ в iiko через `/api/1/order/create`, сохраняет `guest_orders.iiko_order_id`, а следующие новые позиции отправляет через `/api/1/order/add_items`; состояние позиций хранится в `guest_order_items.iiko_position_id`, `iiko_sync_status`, `iiko_sync_error`, `iiko_synced_at`.
+- `POST /iiko/sync/orders/:orderId/status` вызывает `/api/1/order/by_id`, сохраняет `guest_orders.iiko_order_status`, `iiko_order_number`, `iiko_order_sum`, `iiko_order_closed_at`, `iiko_order_payload_json`; при статусе iiko `Closed` локальный заказ закрывается и активная гостевая сессия завершается.
+- При старте сервера включается фоновый pull статусов открытых iiko-заказов, если iiko/order sync включены. По умолчанию интервал 60 секунд, минимум 30 секунд, лимит одного прохода 50 заказов; отключается через `IIKO_ORDER_STATUS_SYNC_ENABLED=false`.
+- Добавлены документы для ручной проверки и дальнейшего структурного наращивания: `docs/IIKO_MANUAL_CHECKLIST.md`, `docs/IIKO_ORDER_SYNC_CHECKLIST.md`, `docs/IIKO_READONLY_ROADMAP.md`, `docs/IIKO_CHECK_REPORT_TEMPLATE.md`, `docs/IIKO_TROUBLESHOOTING.md`.
+- Добавлен защищенный endpoint `POST /iiko/events/payment-paid` для локального iikoFront/edge-коннектора: принимает факт уже прошедшей оплаты, сопоставляет гостя, закрывает локальную гостевую сессию/заказ и отправляет push-запрос оценки визита.
+- Добавлено списание бонусов к оплачиваемому iiko-заказу: `1` балл = `1` рубль, максимум `20%` суммы заказа, обязательная связь через `iiko_order_id` или `local_order_id`, применение по payment-paid webhook и отображение в разделе клиентов.
+- Добавлен прием `POST /iiko/events/order-updated`: локальный iikoFront/edge-коннектор может заранее прислать открытый iiko-заказ, сервер сохраняет его в `iiko_external_orders`, связывает с активным гостем по столу/телефону/session и затем применяет `payment-paid` даже если в оплате пришли только `order_id` и сумма.
+- Добавлен `tools/iiko-event-connector.js`: локальный мост читает JSON/JSONL события из файла, папки или stdin, умеет постоянный `--watch` папки `runtime\iiko\events`, загружает секрет из `server\.env`, отправляет `order-updated`/`payment-paid` в сервер с `X-Gory-Iiko-Secret` и ведет state-файл против повторной отправки.
+- Основной запуск сохраняет существующие `IIKO_*` переменные в `server\.env`, стартует iiko connector после старта API, stop-скрипт его останавливает, watchdog перезапускает, а панель управления показывает состояние процесса.
+- Не реализовано: native iikoFront plugin внутри кассового терминала, live-проверка на реальной iiko-точке, проведение оплаты в приложении, касса, фискализация, изменение оплат и закрытие заказа в iiko из приложения, sync персонала из iiko, UI выбора модификаторов в заказе.
 - Веб-версия.
 - PWA.
 - Чат в интерфейсе.

@@ -16,6 +16,7 @@ import {
   ReservationsScreen,
   RulesScreen,
   ScheduleScreen,
+  SmmScreen,
   StaffScreen,
   StopListScreen,
   TasksScreen,
@@ -48,6 +49,8 @@ export function renderSection(section: SectionKey, props: SectionProps) {
       return <EventsScreen {...props} />;
     case 'announcements':
       return <AnnouncementsScreen {...props} />;
+    case 'smm':
+      return <SmmScreen {...props} />;
     case 'chat':
       return <NotificationsScreen {...props} />;
     case 'rules':

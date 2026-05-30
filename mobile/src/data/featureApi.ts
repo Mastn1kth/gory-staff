@@ -50,6 +50,13 @@ export type GuestSegment = {
   member_count?: number;
 };
 
+export type GuestOrderModifierSelection = {
+  id?: string;
+  modifier_id?: string;
+  menu_item_modifier_id?: string;
+  amount?: number;
+};
+
 export async function createHallSignal(session: ApiSession, tableId: string, signalType: HallSignalType) {
   return fetchJson<HallSignal>(session.apiUrl, '/hall-signals', {
     method: 'POST',
@@ -95,11 +102,21 @@ export async function guestCheckIn(session: GuestSession, token: string) {
   });
 }
 
-export async function createGuestOrderItem(session: GuestSession, menuItemId: string, quantity = 1) {
-  return fetchJson<{ order: unknown; item: unknown }>(session.apiUrl, '/guest/orders/items', {
+export async function createGuestOrderItem(
+  session: GuestSession,
+  menuItemId: string,
+  quantity = 1,
+  modifiers: GuestOrderModifierSelection[] = [],
+) {
+  const body = {
+    menu_item_id: menuItemId,
+    quantity,
+    ...(modifiers.length > 0 ? { modifiers } : {}),
+  };
+  return fetchJson<{ order: unknown; item: unknown; modifiers?: unknown[]; iiko_sync?: unknown }>(session.apiUrl, '/guest/orders/items', {
     method: 'POST',
     token: session.token,
-    body: JSON.stringify({ menu_item_id: menuItemId, quantity }),
+    body: JSON.stringify(body),
   });
 }
 

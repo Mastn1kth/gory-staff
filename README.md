@@ -6,8 +6,8 @@
 
 В панели управления есть основные кнопки:
 
-1. `Запустить сервер` — запускает Docker, PostgreSQL, backend на порту `4000`, обновляет Excel и поднимает публичный Cloudflare HTTPS relay.
-2. `Остановить сервер` — останавливает backend, служебные процессы и PostgreSQL-контейнер. Данные базы не удаляются.
+1. `Запустить сервер` — запускает Docker, PostgreSQL, backend на порту `4000`, обновляет Excel, поднимает публичный Cloudflare HTTPS relay и локальный iiko event connector.
+2. `Остановить сервер` — останавливает backend, iiko connector, служебные процессы и PostgreSQL-контейнер. Данные базы не удаляются.
 3. `Проверить сервер` — показывает, что работает: локальный сервер, Docker, APK, Excel и публичный домен.
 4. `Создать APK` — собирает свежий Android APK локально через Android Studio / Gradle.
 5. `Открыть APK` — открывает папку с последней сборкой `builds\Gory-latest.apk`.
@@ -19,6 +19,7 @@
 - `tools\bat\START_GORY_STAFF.bat`
 - `tools\bat\STOP_GORY_STAFF.bat`
 - `tools\bat\START_PUBLIC_RELAY.bat`
+- `tools\bat\START_IIKO_EVENT_CONNECTOR.bat`
 - `tools\bat\BUILD_ANDROID_APK.bat`
 - `tools\bat\BACKUP_GORY_DATABASE.bat`
 
@@ -287,8 +288,8 @@ CORS_ORIGINS=https://your-public-server.example
 
 Главные файлы в корне:
 
-- `START_GORY_STAFF.bat` — запуск сервера, Docker, PostgreSQL и публичного HTTPS relay.
-- `STOP_GORY_STAFF.bat` — остановка сервера, PostgreSQL, публичного relay и фоновых процессов.
+- `START_GORY_STAFF.bat` — запуск сервера, Docker, PostgreSQL, публичного HTTPS relay и iiko event connector.
+- `STOP_GORY_STAFF.bat` — остановка сервера, PostgreSQL, публичного relay, iiko connector и фоновых процессов.
 - `START_PUBLIC_RELAY.bat` — запуск исходящей связи компьютера с Cloudflare для домена `https://app.gory-staff.ru`.
 - `BUILD_ANDROID_APK.bat` — сборка свежего Android APK.
 - `Gory-latest.apk` — готовое приложение для установки на телефон.
@@ -337,6 +338,213 @@ CORS_ORIGINS=https://your-public-server.example
 а входа сотрудников поднимается над клавиатурой;
 - официант видит блок `Акценты продаж` прямо в меню;
 - корневая папка проекта визуально очищена: сверху остаются только батники, README и актуальный APK.
+
+## Интеграция с iiko
+
+Добавлена синхронизация с iikoCloud: сервер может вручную загрузить категории, блюда, цены, стоп-лист и данные модификаторов из iiko в PostgreSQL, гостевые заказы из приложения отправляются в iiko как table order через `/api/1/order/create` и `/api/1/order/add_items`, а статус конкретного iiko-заказа можно подтянуть обратно через `/api/1/order/by_id`. Интеграция не принимает оплату, не работает с кассой и не делает фискализацию.
+
+Настройка iiko задается только через `server\.env`.
+
+Обязательные переменные для успешного sync:
+
+```env
+IIKO_ENABLED=true
+IIKO_API_LOGIN=your-api-login
+IIKO_ORGANIZATION_ID=your-organization-id
+```
+
+Опциональные переменные:
+
+```env
+IIKO_API_BASE=https://api-ru.iiko.services
+IIKO_TERMINAL_GROUP_ID=your-terminal-group-id
+IIKO_ORDER_SYNC_ENABLED=true
+IIKO_ORDER_STATUS_SYNC_ENABLED=true
+IIKO_ORDER_STATUS_SYNC_INTERVAL_SECONDS=60
+IIKO_ORDER_STATUS_SYNC_LIMIT=50
+IIKO_SOURCE_KEY=gory-staff
+IIKO_SERVICE_PRINT=true
+IIKO_CHECK_STOP_LIST=true
+IIKO_TRANSPORT_TIMEOUT_SECONDS=15
+IIKO_WEBHOOK_SECRET=long-random-secret-for-iiko-connector
+```
+
+`IIKO_ENABLED` должен быть ровно `true`, иначе синхронизация отключена. Если `IIKO_API_LOGIN` пустой, синхронизация тоже отключена. `IIKO_ORGANIZATION_ID` нужен для успешной загрузки меню. `IIKO_TERMINAL_GROUP_ID` используется для фильтра stop-list и обязателен для отправки заказов в iiko. `IIKO_ORDER_SYNC_ENABLED=false` отключает отправку гостевых заказов и автоматический pull статусов, оставляя импорт меню. `IIKO_ORDER_STATUS_SYNC_ENABLED=false` отдельно отключает только фоновое подтягивание статусов. Секреты и реальные ключи в код, README и коммиты не добавляются.
+
+Что делает sync:
+
+- берет токен iiko через `POST /api/1/access_token`;
+- читает меню через `POST /api/1/nomenclature`;
+- читает стоп-лист через `POST /api/1/stop_lists`;
+- обновляет `menu_categories`, `menu_items`, `stop_list`, `menu_item_modifier_groups`, `menu_item_modifiers`;
+- повторный запуск не создает дубли, записи сопоставляются по `iiko_id`;
+- блюда, исчезнувшие из ответа iiko, не удаляются, а получают `status = 'archived'`;
+- группы модификаторов и позиции модификаторов не попадают в обычное видимое меню как блюда, а хранятся отдельно и архивируются, если исчезли из nomenclature;
+- локальные поля вроде подсказок официанту, рекомендаций, себестоимости и служебных полей не затираются;
+- результат пишется в `iiko_sync_log`.
+
+Что делает order sync:
+
+- при добавлении гостем позиции в заказ создает заказ в iiko, если у локального `guest_orders` еще нет `iiko_order_id`;
+- если `iiko_order_id` уже есть, отправляет только новые несинхронизированные позиции через `/api/1/order/add_items`;
+- сопоставляет позиции по `menu_items.iiko_id`, сохраняет `iiko_position_id`, `iiko_sync_status`, `iiko_sync_error` и `iiko_synced_at`;
+- сохраняет состояние заказа в `guest_orders.iiko_order_id`, `iiko_correlation_id`, `iiko_creation_status`, `iiko_order_status`, `iiko_order_number`, `iiko_order_sum`, `iiko_order_closed_at`, `iiko_sync_status`, `iiko_sync_error`;
+- результат каждой попытки пишет в `iiko_order_sync_log`;
+- ручной повтор отправки доступен через `POST /iiko/sync/orders/:orderId`;
+- ручное подтягивание статуса из iiko доступно через `POST /iiko/sync/orders/:orderId/status`; если iiko вернул `Closed`, локальный `guest_orders.status` становится `closed`, активная `table_guest_sessions` закрывается;
+- batch pull открытых заказов доступен через `POST /iiko/sync/orders/statuses`;
+- при старте сервера включается фоновый pull открытых iiko-заказов раз в `IIKO_ORDER_STATUS_SYNC_INTERVAL_SECONDS` секунд, если iiko и order sync включены; минимум интервала 30 секунд, за один проход берется до `IIKO_ORDER_STATUS_SYNC_LIMIT` открытых локальных заказов.
+
+Payment-paid webhook для iikoFront/локального коннектора:
+
+- endpoint: `POST /iiko/events/payment-paid`;
+- alias: `POST /iiko/webhooks/payment-paid`;
+- предварительный импорт/обновление iiko-заказа: `POST /iiko/events/order-updated`, alias `POST /iiko/webhooks/order-updated`;
+- защита: заголовок `X-Gory-Iiko-Secret: <IIKO_WEBHOOK_SECRET>` или `Authorization: Bearer <IIKO_WEBHOOK_SECRET>`;
+- `order-updated` сохраняет iiko-заказ в `iiko_external_orders` и пытается связать его с активным гостем по `guest_id`, телефону, `table_session_id`, `table_id`, `iiko_table_id` или номеру стола;
+- сервер принимает только факт уже прошедшей оплаты; приложение не проводит оплату, не работает с кассой и не фискализирует чек;
+- если событие сопоставилось с гостем по `guest_id`, `local_order_id`, `iiko_order_id`, `table_session_id`, телефону или активному столу, сервер обновляет визиты гостя, закрывает локальный гостевой заказ/сессию и создает push-запрос `Оцените визит`;
+- бонусы можно зарезервировать под оплачиваемый iiko-заказ через `POST /guest/bonus/redemptions` или `POST /admin/guests/:id/bonus-redemptions`;
+- правило списания: `1` балл = `1` рубль, максимум `20%` от суммы заказа; для связи нужен `iiko_order_id` или `local_order_id`;
+- при payment-paid webhook зарезервированное списание получает статус `applied`; если фактическая сумма оплаты дает меньший лимит, лишние бонусы возвращаются отдельной операцией;
+- если `order-updated` уже связал iiko-заказ с гостем, `payment-paid` может прийти только с `order_id` и суммой: сервер найдет гостя через `iiko_external_orders`;
+- повторы не начисляют визит второй раз: событие идемпотентно по `event_id`, `payment_id` и `order_id`.
+
+Минимальный payload от коннектора для `order-updated`:
+
+```json
+{
+  "order_id": "iiko-order-id",
+  "order_number": "77",
+  "table_number": "12",
+  "amount": 1900,
+  "status": "open"
+}
+```
+
+Минимальный payload от коннектора для `payment-paid`:
+
+```json
+{
+  "order_id": "iiko-order-id",
+  "payment_id": "iiko-payment-id",
+  "local_order_id": "guest_orders.id, если есть",
+  "table_session_id": "table_guest_sessions.id, если есть",
+  "guest_phone": "+7 900 000-00-00",
+  "amount": 1900,
+  "status": "paid"
+}
+```
+
+Локальный мост событий для iiko:
+
+- файл: `tools/iiko-event-connector.js`;
+- это не iikoFront plugin и не кассовый модуль; это безопасный мост, который принимает JSON/JSONL события от iikoFront plugin, внешнего скрипта или выгрузки и отправляет их в серверные webhook-и Gory Staff;
+- читает один JSON-объект, JSON-массив, JSONL-файл, папку с `.json`/`.jsonl` файлами или stdin;
+- отправляет `order_updated`, `order_changed`, `order_created`, `order_opened` и события с `order_id` без признака оплаты в `/iiko/events/order-updated`;
+- отправляет в `/iiko/events/payment-paid` только явно оплаченные события: `type/event_type = payment_paid/order_paid/order_closed`, `status = paid/closed/completed/success/...`, `paid: true` или `is_paid: true`; один `payment_id` без paid-статуса не считается оплатой;
+- добавляет заголовок `X-Gory-Iiko-Secret` из `--secret`, переменных окружения `IIKO_WEBHOOK_SECRET`/`GORY_IIKO_WEBHOOK_SECRET` или из `server\.env`;
+- по умолчанию пишет state-файл `runtime/iiko-event-connector-state.json`, чтобы повторный запуск не отправлял уже отправленные `event_id`/`payment_id`/`order_id` повторно;
+- для постоянной работы использует `--watch` и опрашивает папку `runtime\iiko\events`, куда внешний iikoFront plugin или локальный скрипт должен складывать события.
+
+Запуск из файла:
+
+```powershell
+$env:GORY_SERVER_URL = "http://127.0.0.1:4000"
+$env:IIKO_WEBHOOK_SECRET = "<тот же секрет, что в server\.env>"
+node tools\iiko-event-connector.js --file runtime\iiko\events.jsonl
+```
+
+Запуск из папки с событиями:
+
+```powershell
+node tools\iiko-event-connector.js --dir runtime\iiko\events
+```
+
+Постоянный запуск папки событий:
+
+```powershell
+node tools\iiko-event-connector.js --dir runtime\iiko\events --watch --interval-ms 1000
+```
+
+Запуск постоянного коннектора в фоне на Windows:
+
+```bat
+tools\bat\START_IIKO_EVENT_CONNECTOR.bat
+```
+
+Батник создает `runtime\iiko\events`, перезапускает старый процесс по `runtime\iiko\iiko-event-connector.pid` и пишет логи в `runtime\logs\iiko-event-connector.out.log` / `runtime\logs\iiko-event-connector.err.log`. Секрет берется из `server\.env`, если его не передали в окружении.
+
+Обычный `START_GORY_STAFF.bat` теперь тоже запускает этот коннектор после успешного старта API и сохраняет существующие `IIKO_*` переменные в `server\.env`, а `STOP_GORY_STAFF.bat` его останавливает.
+
+Потоковый запуск:
+
+```powershell
+Get-Content runtime\iiko\events.jsonl | node tools\iiko-event-connector.js
+```
+
+Текущий код использует `/api/1/access_token`, потому что этот этап настроен через `IIKO_API_LOGIN`.
+
+Проверить статус:
+
+```powershell
+Invoke-RestMethod -Method Get `
+  -Uri "http://127.0.0.1:4000/iiko/status" `
+  -Headers @{ Authorization = "Bearer <staff-token>" }
+```
+
+`GET /iiko/status` показывает расширенную диагностику: включена ли интеграция, хватает ли обязательных env, какие env отсутствуют, `IIKO_API_LOGIN` только в маске, organization/terminal group, последний menu sync из `iiko_sync_log`, последний order sync из `iiko_order_sync_log`, счетчики обработанных категорий/позиций/заказных позиций и последнюю ошибку. Полный `IIKO_API_LOGIN` в ответ не выводится.
+
+Запустить sync вручную:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:4000/iiko/sync/menu" `
+  -Headers @{ Authorization = "Bearer <staff-token>" }
+```
+
+Повторить отправку конкретного локального заказа в iiko:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:4000/iiko/sync/orders/<guest_orders.id>" `
+  -Headers @{ Authorization = "Bearer <staff-token>" }
+```
+
+Подтянуть статус конкретного iiko-заказа обратно в локальную БД:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:4000/iiko/sync/orders/<guest_orders.id>/status" `
+  -Headers @{ Authorization = "Bearer <staff-token>" }
+```
+
+Подтянуть статусы всех открытых локальных iiko-заказов пачкой:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:4000/iiko/sync/orders/statuses" `
+  -Headers @{ Authorization = "Bearer <staff-token>" }
+```
+
+Доступ к `/iiko/status`, `/iiko/sync/menu`, `/iiko/sync/orders/:orderId`, `/iiko/sync/orders/:orderId/status` и `/iiko/sync/orders/statuses` есть только у авторизованных staff-пользователей с правом `manage:menu`.
+
+Документы по iiko:
+
+- `docs/IIKO_MANUAL_CHECKLIST.md` — чек-лист ручной проверки на реальной тестовой организации;
+- `docs/IIKO_ORDER_SYNC_CHECKLIST.md` — чек-лист проверки отправки гостевых заказов в iiko;
+- `docs/IIKO_READONLY_ROADMAP.md` — старый read-only roadmap, теперь оставлен как историческая заметка;
+- `docs/IIKO_CHECK_REPORT_TEMPLATE.md` — шаблон отчета будущей проверки без секретов;
+- `docs/IIKO_TROUBLESHOOTING.md` — типовые ошибки и безопасная диагностика.
+
+Пока не реализовано:
+
+- онлайн-оплата;
+- касса и фискализация;
+- изменение оплат и закрытие заказа в iiko из приложения;
+- sync персонала из iiko;
+- UI выбора модификаторов в заказе.
+
 ## Public repository data policy
 
 Runtime data is intentionally not stored in Git. The public repository excludes `data/`, `server/.env`, `server/src/restaurantSourceData.json`, generated APK files, local backups, and local build folders. PostgreSQL schema and application code stay in Git; real restaurant data and database exports stay local.

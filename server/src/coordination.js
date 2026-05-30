@@ -35,6 +35,7 @@ function registerCoordinationRoutes(app, deps) {
     buildGuestPayload,
     isBarMenuItem,
     serverDate,
+    syncGuestOrderToIiko,
   } = deps;
 
   const orderStatuses = new Set(['ordered', 'accepted', 'in_progress', 'done', 'served', 'cancelled']);
@@ -175,6 +176,128 @@ function registerCoordinationRoutes(app, deps) {
       [userId],
     );
     return result.rows;
+  }
+
+  function modifierInputsFromBody(body) {
+    const raw = body?.modifiers ?? body?.modifier_selections ?? body?.modifierSelections ?? [];
+    if (raw == null) return [];
+    if (!Array.isArray(raw)) throw httpError('Некорректный список модификаторов.', 400);
+    return raw;
+  }
+
+  function modifierSelectionId(input) {
+    return String(
+      input?.menu_item_modifier_id ??
+        input?.menuItemModifierId ??
+        input?.modifier_id ??
+        input?.modifierId ??
+        input?.id ??
+        input?.iiko_modifier_product_id ??
+        input?.iikoModifierProductId ??
+        '',
+    ).trim();
+  }
+
+  function modifierAmount(input) {
+    const amount = Number(input?.amount ?? input?.quantity ?? 1);
+    if (!Number.isFinite(amount) || amount <= 0) throw httpError('Количество модификатора должно быть больше нуля.', 400);
+    return Math.min(99, Math.round(amount * 1000) / 1000);
+  }
+
+  async function resolveOrderItemModifiers(client, menuItemId, body) {
+    const inputs = modifierInputsFromBody(body);
+    if (inputs.length === 0) return [];
+
+    const available = await client.query(
+      `SELECT
+         mim.id AS menu_item_modifier_id,
+         mim.iiko_modifier_product_id,
+         mim.name,
+         mim.price,
+         mim.min_amount,
+         mim.max_amount,
+         mig.id AS group_id,
+         mig.iiko_modifier_group_id,
+         mig.min_amount AS group_min_amount,
+         mig.max_amount AS group_max_amount
+       FROM menu_item_modifiers mim
+       JOIN menu_item_modifier_groups mig ON mig.id = mim.modifier_group_id
+       WHERE mig.menu_item_id = $1
+         AND mig.status = 'active'
+         AND mim.status = 'active'`,
+      [menuItemId],
+    );
+    const byId = new Map();
+    const byIikoProductId = new Map();
+    for (const row of available.rows) {
+      byId.set(row.menu_item_modifier_id, row);
+      byIikoProductId.set(row.iiko_modifier_product_id, row);
+    }
+
+    const selectedByModifierId = new Map();
+    for (const input of inputs) {
+      const id = modifierSelectionId(input);
+      const modifier = byId.get(id) ?? byIikoProductId.get(id);
+      if (!modifier) throw httpError('Модификатор не найден для этого блюда.', 400);
+      const amount = modifierAmount(input);
+      const existing = selectedByModifierId.get(modifier.menu_item_modifier_id);
+      selectedByModifierId.set(modifier.menu_item_modifier_id, {
+        ...modifier,
+        amount: (existing?.amount ?? 0) + amount,
+      });
+    }
+
+    const groupAmounts = new Map();
+    const selected = [...selectedByModifierId.values()];
+    for (const modifier of selected) {
+      if (modifier.max_amount != null && modifier.amount > Number(modifier.max_amount)) {
+        throw httpError('Превышено количество модификатора.', 400);
+      }
+      if (modifier.min_amount != null && Number(modifier.min_amount) > 0 && modifier.amount < Number(modifier.min_amount)) {
+        throw httpError('Недостаточное количество модификатора.', 400);
+      }
+      groupAmounts.set(modifier.group_id, (groupAmounts.get(modifier.group_id) ?? 0) + modifier.amount);
+    }
+    for (const modifier of selected) {
+      const groupAmount = groupAmounts.get(modifier.group_id) ?? 0;
+      if (modifier.group_max_amount != null && groupAmount > Number(modifier.group_max_amount)) {
+        throw httpError('Превышено количество модификаторов в группе.', 400);
+      }
+      if (modifier.group_min_amount != null && Number(modifier.group_min_amount) > 0 && groupAmount < Number(modifier.group_min_amount)) {
+        throw httpError('Выберите обязательный модификатор.', 400);
+      }
+    }
+
+    return selected;
+  }
+
+  async function insertOrderItemModifiers(client, orderItemId, modifiers) {
+    const rows = [];
+    for (const modifier of modifiers) {
+      const row = (
+        await client.query(
+          `INSERT INTO guest_order_item_modifiers
+             (id, order_item_id, menu_item_modifier_id, modifier_group_id,
+              iiko_modifier_product_id, iiko_modifier_group_id, name, amount, price,
+              created_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
+           RETURNING *`,
+          [
+            uuid(),
+            orderItemId,
+            modifier.menu_item_modifier_id,
+            modifier.group_id,
+            modifier.iiko_modifier_product_id,
+            modifier.iiko_modifier_group_id,
+            modifier.name,
+            modifier.amount,
+            modifier.price ?? 0,
+          ],
+        )
+      ).rows[0];
+      rows.push(row);
+    }
+    return rows;
   }
 
   async function resolveSegmentGuests(client, segment) {
@@ -470,6 +593,7 @@ function registerCoordinationRoutes(app, deps) {
         ).rows[0];
         if (!menuItem) throw httpError('Позиция меню не найдена.', 404);
         if (menuItem.status === 'stop') throw httpError('Эта позиция сейчас в стоп-листе.', 409);
+        const selectedModifiers = await resolveOrderItemModifiers(client, menuItemId, req.body ?? {});
 
         let order = (
           await client.query(
@@ -500,6 +624,7 @@ function registerCoordinationRoutes(app, deps) {
             [uuid(), order.id, menuItemId, quantity, req.body?.comment ?? ''],
           )
         ).rows[0];
+        const modifiers = await insertOrderItemModifiers(client, item.id, selectedModifiers);
         await client.query('UPDATE guest_orders SET updated_at = NOW(), version = version + 1 WHERE id = $1', [order.id]);
         const targetRoles = menuItem.is_kitchen ? ['kitchen'] : isBarMenuItem?.(menuItem, { name: menuItem.category_name }) ? ['bar'] : ['waiter'];
         await createRoleNotifications(client, [...targetRoles, 'management'], {
@@ -518,9 +643,30 @@ function registerCoordinationRoutes(app, deps) {
           });
         }
         await client.query('COMMIT');
+        let iikoSync = null;
+        if (typeof syncGuestOrderToIiko === 'function') {
+          try {
+            iikoSync = await syncGuestOrderToIiko({
+              db: pool,
+              orderId: order.id,
+              env: process.env,
+              randomUUID: uuid,
+              logger: console,
+            });
+          } catch (error) {
+            iikoSync = {
+              status: 'failed',
+              operation: 'create',
+              orderId: order.id,
+              error: error.message,
+            };
+            console.warn('iiko order sync trigger failed:', error.message);
+          }
+        }
         emitChange('guest_orders', 'updated', order);
         emitChange('guest_order_items', 'created', item);
-        res.status(201).json({ order, item });
+        if (modifiers.length > 0) emitChange('guest_order_item_modifiers', 'created', { order_item_id: item.id, items: modifiers });
+        res.status(201).json({ order, item, modifiers, iiko_sync: iikoSync });
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;

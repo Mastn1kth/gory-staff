@@ -8,15 +8,19 @@ import { io } from 'socket.io-client';
 import { BUILD_API_URL } from './buildConfig';
 import { resolveReachableConnection } from './connectionRecovery';
 import { createRealtimeSyncScheduler, runExclusiveSnapshot } from './syncCoordinator';
-import type { ApiSession, DataSnapshot, GuestProfilePayload } from '../types';
+import { orderApiPriorityUrls } from '../utils/connectionCandidates';
+import { normalizeRussianPhoneInput } from '../utils/phoneFormat';
+import type { ApiSession, DataSnapshot, GuestFeedbackRequest, GuestProfilePayload, MenuItemModifier, MenuItemModifierGroup } from '../types';
 
 const SESSION_KEY = 'gory_staff_session';
 const GUEST_SESSION_KEY = 'gory_guest_session';
 const GUEST_PROFILE_CACHE_KEY = 'gory_guest_profile_cache';
 const GUEST_MENU_CACHE_KEY = 'gory_guest_menu_cache';
+const GUEST_NEWS_CACHE_KEY = 'gory_guest_news_cache';
 const STAFF_SYNC_KEY = 'gory_staff_last_sync_at';
 const GUEST_PROFILE_SYNC_KEY = 'gory_guest_profile_last_sync_at';
 const GUEST_MENU_SYNC_KEY = 'gory_guest_menu_last_sync_at';
+const GUEST_NEWS_SYNC_KEY = 'gory_guest_news_last_sync_at';
 const LAST_CONNECTION_KEY = 'gory_last_successful_connection_at';
 const LAST_ACTIVE_MODE_KEY = 'gory_last_active_mode';
 const DEVICE_ID_KEY = 'gory_device_id';
@@ -35,6 +39,12 @@ const CONFIGURED_FALLBACK_API_URLS = String(process.env.EXPO_PUBLIC_FALLBACK_API
   .split(',')
   .map((url) => url.trim())
   .filter(Boolean);
+const LOCAL_DISCOVERY_API_URLS = [
+  'http://192.168.0.2:4000',
+  'http://192.168.0.3:4000',
+  'http://192.168.0.4:4000',
+  'http://192.168.1.2:4000',
+];
 const EXPO_PROJECT_ID = '2b8e0320-5b79-46fc-be0a-5dcea8d90e8f';
 
 export type OfflineQueueItem = {
@@ -102,6 +112,48 @@ export type GuestMenuPayload = {
     is_available?: boolean;
     guest_status_text?: string | null;
   }>;
+  modifier_groups?: MenuItemModifierGroup[];
+  modifiers?: MenuItemModifier[];
+};
+
+export type GuestNewsMedia = {
+  id: string;
+  post_id: string;
+  media_type: 'image' | 'video' | string;
+  url: string;
+  thumbnail_url?: string | null;
+  sort_order?: number;
+};
+
+export type GuestNewsComment = {
+  id: string;
+  post_id: string;
+  guest_id: string;
+  guest_name?: string;
+  text: string;
+  status: string;
+  created_at: string;
+};
+
+export type GuestNewsPost = {
+  id: string;
+  title: string;
+  body: string;
+  source: 'manual' | 'instagram' | 'vk' | string;
+  source_url?: string | null;
+  author_name?: string | null;
+  status: string;
+  published_at?: string | null;
+  created_at: string;
+  media: GuestNewsMedia[];
+  like_count: number;
+  comment_count: number;
+  liked_by_me: boolean;
+  comments: GuestNewsComment[];
+};
+
+export type GuestNewsPayload = {
+  items: GuestNewsPost[];
 };
 
 export type ServerConnectionStatus = {
@@ -118,6 +170,7 @@ export type CacheInfo = {
   staffLastSyncAt: string | null;
   guestProfileLastSyncAt: string | null;
   guestMenuLastSyncAt: string | null;
+  guestNewsLastSyncAt: string | null;
   lastSuccessfulConnectionAt: string | null;
 };
 
@@ -264,16 +317,6 @@ function normalizeApiUrl(apiUrl: string) {
   return apiUrl.trim().replace(/\/$/, '');
 }
 
-function normalizeGuestPhoneInput(value: string) {
-  const raw = String(value ?? '').trim();
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length === 10) return `+7${digits}`;
-  if (digits.length === 11 && digits.startsWith('8')) return `+7${digits.slice(1)}`;
-  if (digits.length === 11 && digits.startsWith('7')) return `+${digits}`;
-  if (raw.startsWith('+') && digits.length >= 10 && digits.length <= 15) return `+${digits}`;
-  throw new ApiError('Введите корректный номер телефона');
-}
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -417,7 +460,7 @@ async function fetchWithRetries(url: string, options: RequestInit, timeoutMs = R
 
 async function pingServer(apiUrl: string, timeoutMs = DISCOVERY_TIMEOUT_MS) {
   try {
-    const response = await fetchWithRetries(`${normalizeApiUrl(apiUrl)}/health`, { method: 'GET' }, timeoutMs);
+    const response = await fetchWithTimeout(`${normalizeApiUrl(apiUrl)}/health`, { method: 'GET', cache: 'no-store' }, timeoutMs);
     const data = await safeJson(response);
     return Boolean(response.ok && data && typeof data === 'object' && (data as { service?: string }).service === 'gory-staff-server');
   } catch {
@@ -446,18 +489,15 @@ async function resolveApiUrl(preferredUrl?: string) {
     throw new ApiError('Нет подключения к интернету.');
   }
   const savedUrl = await AsyncStorage.getItem(API_URL_KEY);
-  const priorityUrls = uniqueUrls([
-    CONFIGURED_API_URL,
-    DEFAULT_API_URL,
+  const priorityUrls = orderApiPriorityUrls({
+    configuredUrl: CONFIGURED_API_URL,
+    defaultUrl: DEFAULT_API_URL,
     preferredUrl,
     savedUrl,
-    ...CONFIGURED_FALLBACK_API_URLS,
-    ANDROID_EMULATOR_API_URL,
-    'http://192.168.0.2:4000',
-    'http://192.168.0.3:4000',
-    'http://192.168.0.4:4000',
-    'http://192.168.1.2:4000',
-  ]);
+    fallbackUrls: CONFIGURED_FALLBACK_API_URLS,
+    emulatorUrl: ANDROID_EMULATOR_API_URL,
+    localProbeUrls: LOCAL_DISCOVERY_API_URLS,
+  });
   const foundUrl = await firstReachableUrl(buildDiscoveryUrls(priorityUrls));
   if (!foundUrl) {
     throw new ApiError(
@@ -592,13 +632,15 @@ export async function getCacheInfo(): Promise<CacheInfo> {
     STAFF_SYNC_KEY,
     GUEST_PROFILE_SYNC_KEY,
     GUEST_MENU_SYNC_KEY,
+    GUEST_NEWS_SYNC_KEY,
     LAST_CONNECTION_KEY,
   ]);
   return {
     staffLastSyncAt: pairs[0]?.[1] ?? null,
     guestProfileLastSyncAt: pairs[1]?.[1] ?? null,
     guestMenuLastSyncAt: pairs[2]?.[1] ?? null,
-    lastSuccessfulConnectionAt: pairs[3]?.[1] ?? null,
+    guestNewsLastSyncAt: pairs[3]?.[1] ?? null,
+    lastSuccessfulConnectionAt: pairs[4]?.[1] ?? null,
   };
 }
 
@@ -820,7 +862,7 @@ export async function logoutGuest() {
 
 export async function guestLogin(apiUrl: string, phone: string) {
   const normalizedUrl = await resolveApiUrl(apiUrl || getFixedApiUrl());
-  const normalizedPhone = normalizeGuestPhoneInput(phone);
+  const normalizedPhone = normalizeRussianPhoneInput(phone);
   const payload = await fetchJson<GuestProfilePayload>(normalizedUrl, '/guest/login', {
     method: 'POST',
     body: JSON.stringify({ phone: normalizedPhone, platform: Platform.OS }),
@@ -840,7 +882,7 @@ export async function guestRegister(
   },
 ) {
   const normalizedUrl = await resolveApiUrl(apiUrl || getFixedApiUrl());
-  const normalizedPhone = normalizeGuestPhoneInput(input.phone);
+  const normalizedPhone = normalizeRussianPhoneInput(input.phone);
   const payload = await fetchJson<GuestProfilePayload>(normalizedUrl, '/guest/register', {
     method: 'POST',
     body: JSON.stringify({
@@ -884,7 +926,7 @@ export async function updateGuestProfile(
 ) {
   if (!session) throw new ApiError('Сначала войдите в гостевой профиль.');
   const body = { ...input };
-  if (body.phone) body.phone = normalizeGuestPhoneInput(body.phone);
+  if (body.phone) body.phone = normalizeRussianPhoneInput(body.phone);
   const profile = await fetchJson<GuestProfilePayload>(session, '/guest/profile', {
     method: 'PATCH',
     body: JSON.stringify(body),
@@ -919,6 +961,49 @@ export async function loadGuestMenu(preferredUrl?: string) {
       offline: true,
     };
   }
+}
+
+export async function loadGuestNews(sessionOrUrl?: GuestSession | string | null) {
+  const preferredUrl = typeof sessionOrUrl === 'string' ? sessionOrUrl : sessionOrUrl?.apiUrl;
+  try {
+    const apiUrl = await resolveApiUrl(preferredUrl || getFixedApiUrl());
+    const source = typeof sessionOrUrl === 'object' && sessionOrUrl?.token ? { ...sessionOrUrl, apiUrl } : apiUrl;
+    const news = await fetchJson<GuestNewsPayload>(source, '/guest/news');
+    await AsyncStorage.multiSet([
+      [GUEST_NEWS_CACHE_KEY, JSON.stringify(news)],
+      [API_URL_KEY, apiUrl],
+      [GUEST_NEWS_SYNC_KEY, nowIso()],
+      [LAST_CONNECTION_KEY, nowIso()],
+    ]);
+    return { news, apiUrl, offline: false };
+  } catch (error) {
+    const cached = await AsyncStorage.getItem(GUEST_NEWS_CACHE_KEY);
+    if (!cached) throw error;
+    return {
+      news: JSON.parse(cached) as GuestNewsPayload,
+      apiUrl: preferredUrl || getFixedApiUrl(),
+      offline: true,
+    };
+  }
+}
+
+export async function likeGuestNewsPost(session: GuestSession, postId: string) {
+  return fetchJson<{ liked: boolean; like_count: number }>(session, `/guest/news/${postId}/like`, {
+    method: 'POST',
+  });
+}
+
+export async function unlikeGuestNewsPost(session: GuestSession, postId: string) {
+  return fetchJson<{ liked: boolean; like_count: number }>(session, `/guest/news/${postId}/like`, {
+    method: 'DELETE',
+  });
+}
+
+export async function commentGuestNewsPost(session: GuestSession, postId: string, text: string) {
+  return fetchJson<GuestNewsComment>(session, `/guest/news/${postId}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  });
 }
 
 export async function signIn(apiUrl: string, login: string, password: string): Promise<ApiSession> {
@@ -1152,4 +1237,11 @@ export async function sendStaffTestPush(session: ApiSession) {
 
 export async function sendGuestTestPush(session: GuestSession) {
   return fetchJson(session, '/guest/push/test', { method: 'POST' });
+}
+
+export async function submitGuestFeedback(session: GuestSession, feedbackRequestId: string, input: { rating: number; comment?: string }) {
+  return fetchJson<GuestFeedbackRequest>(session, `/guest/feedback/${feedbackRequestId}`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }

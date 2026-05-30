@@ -42,6 +42,14 @@ if exist "mobile\android\gradlew.bat" (
 )
 
 echo.
+echo Stopping iiko event connector...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$root=(Resolve-Path -LiteralPath '.').Path; $pidFile=Join-Path $root 'runtime\iiko\iiko-event-connector.pid';" ^
+  "if (Test-Path -LiteralPath $pidFile) { try { Stop-Process -Id ([int](Get-Content -Raw -LiteralPath $pidFile)) -Force -ErrorAction SilentlyContinue } catch {}; Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue };" ^
+  "$ids=Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'tools[\\/]iiko-event-connector\.js' } | Select-Object -ExpandProperty ProcessId;" ^
+  "foreach ($id in $ids) { try { Write-Host ('Stopping iiko connector PID ' + $id); Stop-Process -Id $id -Force -ErrorAction SilentlyContinue } catch {} }"
+
+echo.
 echo Stopping public mobile relay...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$root=(Resolve-Path -LiteralPath '.').Path; $pidFile=Join-Path $root 'runtime\https-relay\edge-connector.pid';" ^

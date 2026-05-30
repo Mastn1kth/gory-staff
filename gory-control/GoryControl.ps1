@@ -13,10 +13,12 @@ $panelLog = Join-Path $logDir 'control-panel.log'
 $serverLog = Join-Path $logDir 'control-start-server.log'
 $buildLog = Join-Path $logDir 'control-build-apk.log'
 $backupLog = Join-Path $logDir 'control-backup.log'
+$restoreLog = Join-Path $logDir 'control-restore.log'
 $importLog = Join-Path $logDir 'control-import-excel.log'
 $startBat = Join-Path $root 'tools\bat\START_GORY_STAFF.bat'
 $buildBat = Join-Path $root 'tools\bat\BUILD_ANDROID_APK.bat'
 $backupBat = Join-Path $root 'tools\bat\BACKUP_GORY_DATABASE.bat'
+$restoreBat = Join-Path $root 'tools\bat\RESTORE_GORY_DATABASE.bat'
 $importBat = Join-Path $root 'tools\bat\IMPORT_STAFF_FROM_EXCEL.bat'
 $excelScript = Join-Path $root 'tools\export_excel_tables.py'
 $excelFile = Join-Path $dataDir 'Gory-Data.xlsx'
@@ -38,6 +40,7 @@ $serverStartRequestedAt = $null
 $lastServerLogLength = Get-LogLength $serverLog
 $lastBuildLogLength = Get-LogLength $buildLog
 $lastBackupLogLength = Get-LogLength $backupLog
+$lastRestoreLogLength = Get-LogLength $restoreLog
 $lastImportLogLength = Get-LogLength $importLog
 
 function New-Font($size, [System.Drawing.FontStyle] $style = [System.Drawing.FontStyle]::Regular) {
@@ -105,7 +108,8 @@ function Start-LoggedBat {
     [string] $Name,
     [string] $BatPath,
     [string] $LogPath,
-    [switch] $PipeEnter
+    [switch] $PipeEnter,
+    [switch] $ConfirmRestore
   )
 
   if (-not (Test-Path -LiteralPath $BatPath)) {
@@ -118,11 +122,13 @@ function Start-LoggedBat {
   if ($LogPath -eq $script:serverLog) { $script:lastServerLogLength = $existingLogLength }
   if ($LogPath -eq $script:buildLog) { $script:lastBuildLogLength = $existingLogLength }
   if ($LogPath -eq $script:backupLog) { $script:lastBackupLogLength = $existingLogLength }
+  if ($LogPath -eq $script:restoreLog) { $script:lastRestoreLogLength = $existingLogLength }
   if ($LogPath -eq $script:importLog) { $script:lastImportLogLength = $existingLogLength }
   Add-Log "Запускаю: $Name"
 
   $batCommand = 'chcp 65001>nul'
   if ($PipeEnter) { $batCommand += ' & set "GORY_CONTROL_NO_PAUSE=1"' }
+  if ($ConfirmRestore) { $batCommand += ' & set "GORY_CONTROL_NO_PAUSE=1" & set "GORY_RESTORE_CONFIRM=1"' }
   $batCommand += ' & call "' + $BatPath + '" >> "' + $LogPath + '" 2>>&1'
   $process = Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/c', $batCommand) -WorkingDirectory $root -WindowStyle Hidden -PassThru
 
@@ -187,6 +193,22 @@ function Stop-GoryStack {
         Where-Object { $_.CommandLine -match 'tools[\\/]gory-edge-connector\.js' } |
         Select-Object -ExpandProperty ProcessId
       foreach ($id in $relayIds) {
+        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+      }
+    } catch {}
+
+    try {
+      $iikoPidFile = Join-Path $root 'runtime\iiko\iiko-event-connector.pid'
+      if (Test-Path -LiteralPath $iikoPidFile) {
+        $iikoPid = [int](Get-Content -Raw -LiteralPath $iikoPidFile)
+        Stop-Process -Id $iikoPid -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $iikoPidFile -Force -ErrorAction SilentlyContinue
+        $lines += "Остановлен iiko connector PID $iikoPid"
+      }
+      $iikoIds = Get-CimInstance Win32_Process |
+        Where-Object { $_.CommandLine -match 'tools[\\/]iiko-event-connector\.js' } |
+        Select-Object -ExpandProperty ProcessId
+      foreach ($id in $iikoIds) {
         Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
       }
     } catch {}
@@ -362,6 +384,19 @@ function Check-GoryState {
       $lines += 'Публичный relay: не проверен.'
     }
 
+    try {
+      $iikoProcess = Get-CimInstance Win32_Process |
+        Where-Object { $_.CommandLine -match 'tools[\\/]iiko-event-connector\.js' } |
+        Select-Object -First 1
+      if ($iikoProcess) {
+        $lines += 'iiko connector: процесс запущен.'
+      } else {
+        $lines += 'iiko connector: процесс не запущен.'
+      }
+    } catch {
+      $lines += 'iiko connector: не проверен.'
+    }
+
     $apk = Join-Path $root 'builds\Gory-latest.apk'
     $excel = Join-Path $root 'data\Gory-Data.xlsx'
     $lines += if (Test-Path -LiteralPath $apk) { 'APK: найден builds\Gory-latest.apk' } else { 'APK: не найден, нажми Создать APK.' }
@@ -518,6 +553,7 @@ $btnBuild = New-Button 'Создать APK' 28 198
 $btnOpenApk = New-Button 'Открыть APK' 224 198
 $btnOpenExcel = New-Button 'Открыть Excel' 420 198
 $btnBackup = New-Button 'Бэкап базы' 616 198
+$btnRestore = New-Button 'Восстановить' 812 198 128
 
 $apiCard = New-StatusCard 'Локальный сервер' 28 272
 $mobileCard = New-StatusCard 'Мобильный интернет' 326 272
@@ -579,6 +615,20 @@ $btnBackup.Add_Click({
   Set-Card $filesCard 'бэкап базы' '#D7A94A'
   Start-LoggedBat 'ручной бэкап базы' $backupBat $backupLog -PipeEnter
 })
+$btnRestore.Add_Click({
+  $answer = [System.Windows.Forms.MessageBox]::Show(
+    "Восстановление заменит локальную базу PostgreSQL самым свежим непустым SQL-бэкапом из папки backups.`n`nПродолжить?",
+    'Восстановить базу',
+    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+    [System.Windows.Forms.MessageBoxIcon]::Warning
+  )
+  if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
+    Add-Log 'Восстановление базы отменено.'
+    return
+  }
+  Set-Card $filesCard 'восстановление' '#D7A94A'
+  Start-LoggedBat 'восстановление базы' $restoreBat $restoreLog -ConfirmRestore
+})
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 1500
@@ -586,6 +636,7 @@ $timer.Add_Tick({
   Pull-NewLogText $serverLog ([ref]$script:lastServerLogLength)
   Pull-NewLogText $buildLog ([ref]$script:lastBuildLogLength)
   Pull-NewLogText $backupLog ([ref]$script:lastBackupLogLength)
+  Pull-NewLogText $restoreLog ([ref]$script:lastRestoreLogLength)
   Pull-NewLogText $importLog ([ref]$script:lastImportLogLength)
 
   foreach ($entry in @($script:jobs)) {
@@ -629,7 +680,7 @@ $timer.Add_Tick({
 $timer.Start()
 
 Add-Log 'Панель управления готова.'
-Add-Log 'Кнопки: запустить, остановить, проверить сервер, домен, создать APK, открыть APK, открыть Excel, бэкап базы.'
+Add-Log 'Кнопки: запустить, остановить, проверить сервер, домен, создать APK, открыть APK, открыть Excel, бэкап базы, восстановить.'
 Add-Log 'Если мобильный интернет не работает, нажми «Проверить сервер» и смотри строки публичного relay.'
 
 [void] $form.ShowDialog()

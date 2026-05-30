@@ -10,14 +10,17 @@ Set-Location -LiteralPath $ProjectRoot
 $LogDir = Join-Path $ProjectRoot 'runtime\logs'
 $PidDir = Join-Path $ProjectRoot 'runtime\pids'
 $RelayDir = Join-Path $ProjectRoot 'runtime\https-relay'
+$IikoDir = Join-Path $ProjectRoot 'runtime\iiko'
+$IikoEventsDir = Join-Path $IikoDir 'events'
 $WatchdogLog = Join-Path $LogDir 'gory-watchdog.log'
 $WatchdogPidFile = Join-Path $PidDir 'gory-watchdog.pid'
 $ServerPidFile = Join-Path $PidDir 'gory-server.pid'
 $RelayPidFile = Join-Path $RelayDir 'edge-connector.pid'
 $RelayTokenFile = Join-Path $RelayDir 'register-token.txt'
+$IikoConnectorPidFile = Join-Path $IikoDir 'iiko-event-connector.pid'
 $PublicUrl = 'https://app.gory-staff.ru'
 
-New-Item -ItemType Directory -Force -Path $LogDir, $PidDir, $RelayDir | Out-Null
+New-Item -ItemType Directory -Force -Path $LogDir, $PidDir, $RelayDir, $IikoDir, $IikoEventsDir | Out-Null
 Set-Content -Encoding ASCII -LiteralPath $WatchdogPidFile -Value $PID
 
 function Write-WatchLog {
@@ -187,6 +190,56 @@ function Ensure-PublicRelay {
   return $false
 }
 
+function Get-IikoEventConnectorProcessIds {
+  $ids = @()
+  $pidFromFile = Get-PidFileValue $IikoConnectorPidFile
+  if ($pidFromFile -and (Test-ProcessAlive $pidFromFile)) {
+    $ids += $pidFromFile
+  }
+  try {
+    $ids += Get-CimInstance Win32_Process |
+      Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match 'tools[\\/]iiko-event-connector\.js' } |
+      Select-Object -ExpandProperty ProcessId
+  } catch {}
+  return @($ids | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Stop-IikoEventConnector {
+  foreach ($id in (Get-IikoEventConnectorProcessIds)) {
+    try {
+      Write-WatchLog "Stopping iiko event connector PID $id"
+      Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+    } catch {}
+  }
+  Remove-Item -LiteralPath $IikoConnectorPidFile -Force -ErrorAction SilentlyContinue
+}
+
+function Start-IikoEventConnector {
+  Stop-IikoEventConnector
+  New-Item -ItemType Directory -Force -Path $IikoEventsDir | Out-Null
+  $out = Join-Path $LogDir 'iiko-event-connector.out.log'
+  $err = Join-Path $LogDir 'iiko-event-connector.err.log'
+  Write-WatchLog 'Starting iiko event connector'
+  $process = Start-Process -FilePath 'node.exe' `
+    -ArgumentList @('tools\iiko-event-connector.js', '--dir', 'runtime\iiko\events', '--watch', '--interval-ms', '1000') `
+    -WorkingDirectory $ProjectRoot `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $out `
+    -RedirectStandardError $err `
+    -PassThru
+  Set-Content -Encoding ASCII -LiteralPath $IikoConnectorPidFile -Value $process.Id
+}
+
+function Ensure-IikoEventConnector {
+  if ((Get-IikoEventConnectorProcessIds).Count -gt 0) {
+    return $true
+  }
+
+  Write-WatchLog 'iiko event connector is not running; restarting connector'
+  Start-IikoEventConnector
+  return (Get-IikoEventConnectorProcessIds).Count -gt 0
+}
+
 function Ensure-Postgres {
   $docker = Get-Command docker.exe -ErrorAction SilentlyContinue
   if (-not $docker) {
@@ -232,6 +285,7 @@ while ($true) {
     Ensure-Postgres | Out-Null
     Ensure-GoryApi | Out-Null
     Ensure-PublicRelay | Out-Null
+    Ensure-IikoEventConnector | Out-Null
   } catch {
     Write-WatchLog "Watchdog loop error: $($_.Exception.Message)"
   }

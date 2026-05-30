@@ -2,6 +2,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as _react from 'react';
 import { jsx, jsxs } from 'react/jsx-runtime';
@@ -23,20 +24,21 @@ import {
 } from 'react-native';
 
 import { GuestBookingPanel } from '../components/GuestBookingPanel';
-import { GuestCheckInPanel } from '../components/GuestCheckInPanel';
-import { GuestTimelinePanel } from '../components/GuestTimelinePanel';
-import { createGuestOrderItem } from '../data/featureApi';
 import {
   checkServerConnection,
   getFixedApiUrl,
   getStoredGuestSession,
   guestLogin,
   guestRegister,
+  commentGuestNewsPost,
+  likeGuestNewsPost,
   loadGuestMenu,
+  loadGuestNews,
   loadGuestProfile,
   logoutGuest,
   updateGuestProfile,
 } from '../data/api';
+import { formatRussianPhoneInput } from '../utils/phoneFormat';
 import { Card, EmptyState, Field, KeyboardAwareScrollView, ModalSheet, Pill, PrimaryButton, ScreenScroll, SecondaryButton, SectionTitle } from '../components/ui';
 import { palette, shadow } from '../theme';
 import * as _theme from '../theme';
@@ -71,11 +73,11 @@ const loyaltyTiers = [{
     benefits: ['Индивидуальные предложения', 'Лучшие приглашения ресторана']
   }];
 const guestTabs = [{
-    key: 'profile',
+    key: 'news',
     label: 'Профиль',
     icon: 'person-circle-outline'
   }, {
-    key: 'home',
+    key: 'restaurant',
     label: 'Главная',
     icon: 'restaurant-outline'
   }, {
@@ -83,11 +85,15 @@ const guestTabs = [{
     label: 'Меню',
     icon: 'book-outline'
   }, {
-    key: 'route',
+    key: 'bonus',
     label: 'Маршрут',
     icon: 'location-outline'
   }];
-const guestTabOrder = ['home', 'menu', 'route', 'profile'];
+const guestTabOrder = ['news', 'restaurant', 'menu', 'bonus', 'profile'];
+guestTabs[0] = { key: 'news', label: 'Новости', icon: 'newspaper-outline' };
+guestTabs[1] = { key: 'restaurant', label: 'Ресторан', icon: 'restaurant-outline' };
+guestTabs[3] = { key: 'bonus', label: 'Бонусная карта', icon: 'card-outline' };
+guestTabs.push({ key: 'profile', label: 'Профиль', icon: 'person-circle-outline' });
 const guestTabsInDisplayOrder = guestTabOrder
   .map(key => guestTabs.find(tab => tab.key === key))
   .filter(Boolean);
@@ -133,7 +139,7 @@ const birthdayDays = Array.from({ length: 31 }, (_, index) => String(index + 1).
 const birthdayMonths = Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, '0'));
 const birthdayYears = Array.from({ length: 90 }, (_, index) => String(new Date().getFullYear() - 14 - index));
 export function GuestApp({
-  initialTab = 'home',
+  initialTab = 'news',
   onDismissStaffMessage,
   onStaffEntry,
   onStaffLogin,
@@ -141,7 +147,7 @@ export function GuestApp({
   staffLoading,
   staffMessage,
 }: {
-  initialTab?: 'profile' | 'home' | 'menu' | 'route';
+  initialTab?: 'news' | 'restaurant' | 'menu' | 'bonus' | 'profile';
   onDismissStaffMessage?: () => void;
   onStaffEntry?: () => Promise<boolean>;
   onStaffLogin: (apiUrl: string, login: string, password: string) => Promise<void>;
@@ -158,12 +164,17 @@ export function GuestApp({
         categories: [],
         items: []
       });
+    const [guestNews, setGuestNews] = useState({ items: [] });
+    const [guestNewsLoading, setGuestNewsLoading] = useState(true);
+    const [guestMenuLoading, setGuestMenuLoading] = useState(true);
     const [guestOffline, setGuestOffline] = useState(false);
     const [guestSyncing, setGuestSyncing] = useState(false);
     const [guestMessage, setGuestMessage] = useState(null);
     const [guestMode, setGuestMode] = useState(null);
     const [staffVisible, setStaffVisible] = useState(false);
     const [menuQuery, setMenuQuery] = useState('');
+    const [selectedDish, setSelectedDish] = useState(null);
+    const [newsCommentDrafts, setNewsCommentDrafts] = useState({});
     const reconnectAttemptRef = useRef(0);
     const [category, setCategory] = useState('Все');
     const [referralModalVisible, setReferralModalVisible] = useState(false);
@@ -193,6 +204,18 @@ export function GuestApp({
             setGuestOffline(current => current || _result.offline);
           } catch (_error) {
             if (alive) setGuestOffline(true);
+          } finally {
+            if (alive) setGuestMenuLoading(false);
+          }
+          try {
+            var newsResult = await loadGuestNews(stored);
+            if (!alive) return;
+            setGuestNews(newsResult.news);
+            setGuestOffline(current => current || newsResult.offline);
+          } catch (_error) {
+            if (alive) setGuestOffline(true);
+          } finally {
+            if (alive) setGuestNewsLoading(false);
           }
       }
       void bootGuest();
@@ -203,10 +226,12 @@ export function GuestApp({
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
     async function syncGuestData(showRestoredMessage = false) {
+        setGuestMenuLoading(true);
         var targetUrl = guestSession?.apiUrl || getFixedApiUrl();
         var connection = await checkServerConnection(targetUrl);
         if (!connection.online) {
           setGuestOffline(true);
+          setGuestMenuLoading(false);
           return false;
         }
         setGuestSyncing(true);
@@ -222,6 +247,8 @@ export function GuestApp({
           }
           var menuResult = await loadGuestMenu(connection.apiUrl);
           setGuestMenu(menuResult.menu);
+          var newsResult = await loadGuestNews(guestSession ? { ...guestSession, apiUrl: connection.apiUrl } : connection.apiUrl);
+          setGuestNews(newsResult.news);
           setGuestOffline(false);
           if (showRestoredMessage) setGuestMessage('Подключение восстановлено. Данные обновлены.');
           return true;
@@ -231,6 +258,7 @@ export function GuestApp({
           return false;
         } finally {
           setGuestSyncing(false);
+          setGuestMenuLoading(false);
         }
     }
     useEffect(() => {
@@ -264,9 +292,9 @@ export function GuestApp({
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [guestOffline, guestSession?.token]);
     useEffect(() => {
-      var index = Math.max(0, guestTabs.findIndex(tab => tab.key === initialTab));
-      var tab = guestTabs[index];
-      if (tab) setActiveTab(tab.key);
+      var index = Math.max(0, guestTabOrder.findIndex(tab => tab === initialTab));
+      var tab = guestTabOrder[index];
+      if (tab) setActiveTab(tab);
       if (pageWidth <= 1) return;
       var timer = setTimeout(() => pagerRef.current?.scrollTo({
         x: index * pageWidth,
@@ -275,7 +303,7 @@ export function GuestApp({
       return () => clearTimeout(timer);
     }, [initialTab, pageWidth]);
     var goToTab = nextTab => {
-      var index = guestTabs.findIndex(tab => tab.key === nextTab);
+      var index = guestTabOrder.findIndex(tab => tab === nextTab);
       if (index < 0) return;
       setActiveTab(nextTab);
       pagerRef.current?.scrollTo({
@@ -348,11 +376,57 @@ export function GuestApp({
         return;
       }
       try {
-        await createGuestOrderItem(guestSession, menuItemId, 1);
+        setSelectedDish(menuItems.find(item => item.id === menuItemId) ?? null);
         setGuestMessage('Позиция добавлена в заказ.');
         await refreshGuestProfile(guestSession);
       } catch (error) {
         setGuestMessage(error instanceof Error ? error.message : 'Не удалось добавить позицию.');
+      }
+    }
+    async function refreshGuestNews(session = guestSession) {
+      try {
+        var result = await loadGuestNews(session || getFixedApiUrl());
+        setGuestNews(result.news);
+        setGuestOffline(result.offline);
+      } catch (error) {
+        setGuestMessage(error instanceof Error ? error.message : 'Не удалось обновить новости.');
+      }
+    }
+    async function handleNewsLike(post) {
+      if (!guestSession?.token) {
+        setGuestMode('login');
+        setGuestMessage('Войдите в профиль, чтобы ставить лайки.');
+        return;
+      }
+      try {
+        var likeResult = await likeGuestNewsPost(guestSession, post.id);
+        setGuestNews(current => ({
+          items: (current.items ?? []).map(item => item.id === post.id ? { ...item, liked_by_me: likeResult.liked, like_count: likeResult.like_count } : item)
+        }));
+      } catch (error) {
+        setGuestMessage(error instanceof Error ? error.message : 'Не удалось поставить лайк.');
+      }
+    }
+    async function handleNewsComment(post) {
+      if (!guestSession?.token) {
+        setGuestMode('login');
+        setGuestMessage('Войдите в профиль, чтобы комментировать.');
+        return;
+      }
+      var text = String(newsCommentDrafts[post.id] ?? '').trim();
+      if (!text) return;
+      try {
+        var comment = await commentGuestNewsPost(guestSession, post.id, text);
+        setNewsCommentDrafts(current => ({ ...current, [post.id]: '' }));
+        setGuestNews(current => ({
+          items: (current.items ?? []).map(item => item.id === post.id ? {
+            ...item,
+            comment_count: Number(item.comment_count ?? 0) + 1,
+            comments: [...(item.comments ?? []), comment]
+          } : item)
+        }));
+      } catch (error) {
+        setGuestMessage(error instanceof Error ? error.message : 'Не удалось отправить комментарий.');
       }
     }
     async function handleGuestProfileUpdate(form) {
@@ -417,13 +491,19 @@ export function GuestApp({
           showsHorizontalScrollIndicator: false,
           onLayout: event => setPageWidth(event.nativeEvent.layout.width),
           contentOffset: {
-            x: Math.max(0, guestTabs.findIndex(tab => tab.key === initialTab)) * pageWidth,
+            x: Math.max(0, guestTabOrder.findIndex(tab => tab === initialTab)) * pageWidth,
             y: 0
           },
           style: styles.pager,
           children: [/*#__PURE__*/jsx(GuestPage, {
             width: pageWidth,
-            children: /*#__PURE__*/jsx(GuestProfileScreen, {
+            children: /*#__PURE__*/jsx(GuestNewsScreen, {
+              items: guestNews.items ?? [],
+              loading: guestNewsLoading,
+              commentDrafts: newsCommentDrafts,
+              onCommentDraft: (postId, text) => setNewsCommentDrafts(current => ({ ...current, [postId]: text })),
+              onComment: handleNewsComment,
+              onLike: handleNewsLike,
               guestMessage: guestMessage,
               offline: guestOffline,
               profile: guestProfile,
@@ -441,13 +521,16 @@ export function GuestApp({
             })
           }), /*#__PURE__*/jsx(GuestPage, {
             width: pageWidth,
-            children: /*#__PURE__*/jsx(GuestHomeScreen, {
+            children: /*#__PURE__*/jsx(GuestRestaurantScreen, {
               offline: guestOffline,
               popular: popular,
               guestSession: guestSession,
               guestName: guestProfile?.guest?.name ?? 'Гость',
               onOpenMenu: () => goToTab('menu'),
-              onRoute: () => goToTab('route')
+              onRoute: openRoute,
+              onCall: callRestaurant,
+              onCopyAddress: copyAddress,
+              onLogin: () => setGuestMode('login')
             })
           }), /*#__PURE__*/jsx(GuestPage, {
             width: pageWidth,
@@ -457,20 +540,40 @@ export function GuestApp({
               guestSession: guestSession,
               guestProfile: guestProfile,
               items: filteredMenu,
+              loading: guestMenuLoading,
               offline: guestOffline,
               query: menuQuery,
               onCategory: setCategory,
-              onCheckedIn: handleGuestCheckedIn,
-              onOrder: handleGuestOrder,
-              onQuery: setMenuQuery
+              onDishPress: setSelectedDish,
+              onQuery: setMenuQuery,
+              onRefresh: () => syncGuestData(true)
             })
           }), /*#__PURE__*/jsx(GuestPage, {
             width: pageWidth,
-            children: /*#__PURE__*/jsx(GuestRouteScreen, {
+            children: /*#__PURE__*/jsx(GuestBonusScreen, {
               offline: guestOffline,
-              onCall: callRestaurant,
-              onCopyAddress: copyAddress,
-              onOpenRoute: openRoute
+              profile: guestProfile,
+              onCopyCode: copyReferralCode,
+              onLogin: () => setGuestMode('login'),
+              onRefresh: () => refreshGuestProfile(),
+              onRegister: () => setGuestMode('register'),
+              onShowCode: () => setReferralModalVisible(true),
+              onShowLevel: () => setLoyaltyModalVisible(true),
+              onShareCode: shareReferralCode
+            })
+          }), /*#__PURE__*/jsx(GuestPage, {
+            width: pageWidth,
+            children: /*#__PURE__*/jsx(GuestProfileScreen, {
+              guestMessage: guestMessage,
+              offline: guestOffline,
+              profile: guestProfile,
+              guestSession: guestSession,
+              onLogin: () => setGuestMode('login'),
+              onLogout: handleGuestLogout,
+              onEditProfile: () => setGuestEditVisible(true),
+              onRefresh: () => refreshGuestProfile(),
+              onRegister: () => setGuestMode('register'),
+              onStaff: openStaffEntry
             })
           })]
         }), guestOffline || guestSyncing ? /*#__PURE__*/jsxs(View, {
@@ -532,6 +635,10 @@ export function GuestApp({
         },
         onSubmit: (login, password) => onStaffLogin(getFixedApiUrl(), login, password),
         onRegister: (name, phone, login, password) => onStaffRegister(getFixedApiUrl(), name, phone, login, password)
+      }), /*#__PURE__*/jsx(DishDetailModal, {
+        item: selectedDish,
+        visible: Boolean(selectedDish),
+        onClose: () => setSelectedDish(null)
       })]
     });
   }
@@ -543,6 +650,149 @@ export function GuestApp({
         width
       }],
       children: children
+    });
+  }
+  function GuestNewsScreen(_ref3) {
+    var items = _ref3.items ?? [],
+      loading = _ref3.loading,
+      offline = _ref3.offline,
+      commentDrafts = _ref3.commentDrafts ?? {},
+      onCommentDraft = _ref3.onCommentDraft,
+      onComment = _ref3.onComment,
+      onLike = _ref3.onLike,
+      onLogin = _ref3.onLogin,
+      onRefresh = _ref3.onRefresh;
+    return /*#__PURE__*/jsxs(KeyboardAwareScrollView, {
+      contentContainerStyle: styles.feedContent,
+      baseBottomPadding: 118,
+      showsVerticalScrollIndicator: false,
+      keyboardShouldPersistTaps: "handled",
+      contentInsetAdjustmentBehavior: "automatic",
+      children: [/*#__PURE__*/jsxs(View, {
+        style: styles.headerLine,
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.brand,
+          children: "Горы"
+        }), offline ? /*#__PURE__*/jsx(Text, {
+          style: styles.offlineBadge,
+          children: "нет связи"
+        }) : null]
+      }), /*#__PURE__*/jsx(Text, {
+        style: styles.screenTitle,
+        children: "Новости"
+      }), loading ? /*#__PURE__*/jsx(Card, {
+        tone: "soft",
+        children: /*#__PURE__*/jsx(Text, {
+          style: styles.mutedDark,
+          children: "Загружаем новости"
+        })
+      }) : items.length ? items.map(post => /*#__PURE__*/jsx(NewsPostCard, {
+        post: post,
+        draft: commentDrafts[post.id] ?? '',
+        onDraft: text => onCommentDraft(post.id, text),
+        onLike: () => onLike(post),
+        onComment: () => onComment(post)
+      }, post.id)) : /*#__PURE__*/jsxs(Card, {
+        tone: "soft",
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.cardTitleDark,
+          children: "Новостей пока нет"
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.mutedDark,
+          children: "Когда SMM опубликует пост или подтянется отметка из Instagram/VK, она появится здесь."
+        }), /*#__PURE__*/jsx(SecondaryButton, {
+          title: "Обновить новости",
+          onPress: onRefresh
+        })]
+      }), /*#__PURE__*/jsx(SecondaryButton, {
+        title: "Войти, чтобы комментировать",
+        onPress: onLogin
+      })]
+    });
+  }
+  function NewsVideoPlayer(_refVideo) {
+    var url = _refVideo.url;
+    var player = useVideoPlayer(url, player => {
+      player.loop = true;
+      player.muted = false;
+    });
+    return /*#__PURE__*/jsx(VideoView, {
+      player: player,
+      style: styles.feedMedia,
+      nativeControls: true,
+      allowsFullscreen: true,
+      contentFit: "cover"
+    });
+  }
+  function NewsPostCard(_refNewsPost) {
+    var post = _refNewsPost.post,
+      draft = _refNewsPost.draft,
+      onDraft = _refNewsPost.onDraft,
+      onLike = _refNewsPost.onLike,
+      onComment = _refNewsPost.onComment;
+    var media = post.media?.[0] ?? null;
+    var imageUrl = media?.thumbnail_url || media?.url;
+    var isVideo = media?.media_type === 'video' && media?.url;
+    return /*#__PURE__*/jsxs(Card, {
+      children: [imageUrl ? /*#__PURE__*/jsxs(View, {
+        style: styles.feedMediaFrame,
+        children: [isVideo ? /*#__PURE__*/jsx(NewsVideoPlayer, {
+          url: media.url
+        }) : /*#__PURE__*/jsx(Image, {
+          source: { uri: imageUrl },
+          style: styles.feedMedia
+        })]
+      }) : null, /*#__PURE__*/jsx(Text, {
+        style: styles.cardTitleDark,
+        children: post.title
+      }), /*#__PURE__*/jsx(Text, {
+        style: styles.mutedDark,
+        children: post.body
+      }), /*#__PURE__*/jsxs(View, {
+        style: styles.newsActions,
+        children: [/*#__PURE__*/jsxs(Pressable, {
+          onPress: onLike,
+          style: styles.newsActionButton,
+          children: [/*#__PURE__*/jsx(Ionicons, {
+            name: post.liked_by_me ? "heart" : "heart-outline",
+            size: 20,
+            color: post.liked_by_me ? palette.burgundy : palette.ink
+          }), /*#__PURE__*/jsx(Text, {
+            style: styles.newsActionText,
+            children: String(post.like_count ?? 0)
+          })]
+        }), /*#__PURE__*/jsxs(View, {
+          style: styles.newsActionButton,
+          children: [/*#__PURE__*/jsx(Ionicons, {
+            name: "chatbubble-outline",
+            size: 20,
+            color: palette.ink
+          }), /*#__PURE__*/jsx(Text, {
+            style: styles.newsActionText,
+            children: String(post.comment_count ?? 0)
+          })]
+        })]
+      }), (post.comments ?? []).slice(-3).map(comment => /*#__PURE__*/jsxs(View, {
+        style: styles.commentLine,
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.commentAuthor,
+          children: comment.guest_name ?? "Гость"
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.commentText,
+          children: comment.text
+        })]
+      }, comment.id)), /*#__PURE__*/jsxs(View, {
+        style: styles.commentComposer,
+        children: [/*#__PURE__*/jsx(Field, {
+          label: "Комментарий",
+          placeholder: "Написать комментарий",
+          value: draft,
+          onChangeText: onDraft
+        }), /*#__PURE__*/jsx(SecondaryButton, {
+          title: "Отправить",
+          onPress: onComment
+        })]
+      })]
     });
   }
   function GuestProfileScreen(_ref3) {
@@ -561,6 +811,81 @@ export function GuestApp({
       onShareCode = _ref3.onShareCode,
       onStaff = _ref3.onStaff;
     var guest = profile?.guest ?? null;
+    return /*#__PURE__*/jsxs(KeyboardAwareScrollView, {
+      contentContainerStyle: styles.content,
+      baseBottomPadding: 118,
+      showsVerticalScrollIndicator: false,
+      keyboardShouldPersistTaps: "handled",
+      contentInsetAdjustmentBehavior: "automatic",
+      children: [/*#__PURE__*/jsxs(View, {
+        style: styles.headerLine,
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.brand,
+          children: "Горы"
+        }), offline ? /*#__PURE__*/jsx(Text, {
+          style: styles.offlineBadge,
+          children: "нет связи"
+        }) : null]
+      }), /*#__PURE__*/jsx(Text, {
+        style: styles.screenTitle,
+        children: "Профиль"
+      }), guestMessage ? /*#__PURE__*/jsx(Text, {
+        style: styles.notice,
+        children: guestMessage
+      }) : null, guest ? /*#__PURE__*/jsxs(Fragment, {
+        children: [/*#__PURE__*/jsxs(Card, {
+          children: [/*#__PURE__*/jsx(Text, {
+            style: styles.cardTitleDark,
+            children: guest.name
+          }), /*#__PURE__*/jsx(Text, {
+            style: styles.mutedDark,
+            children: guest.phone
+          }), guest.birthday ? /*#__PURE__*/jsx(Text, {
+            style: styles.mutedDark,
+            children: `День рождения: ${guest.birthday}`
+          }) : null]
+        }), /*#__PURE__*/jsx(SecondaryButton, {
+          title: "Редактировать профиль",
+          onPress: onEditProfile
+        }), /*#__PURE__*/jsx(SecondaryButton, {
+          title: "Обновить профиль",
+          onPress: onRefresh
+        }), /*#__PURE__*/jsx(SecondaryButton, {
+          title: "Выйти",
+          danger: true,
+          onPress: onLogout
+        })]
+      }) : /*#__PURE__*/jsxs(Card, {
+        tone: "soft",
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.cardTitleDark,
+          children: "Вход в гостевой профиль"
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.mutedDark,
+          children: "Войдите или зарегистрируйтесь, чтобы редактировать личные данные."
+        }), /*#__PURE__*/jsxs(View, {
+          style: styles.rowButtons,
+          children: [/*#__PURE__*/jsx(PrimaryButton, {
+            title: "Войти",
+            onPress: onLogin
+          }), /*#__PURE__*/jsx(SecondaryButton, {
+            title: "Регистрация",
+            onPress: onRegister
+          })]
+        })]
+      }), /*#__PURE__*/jsxs(Pressable, {
+        onPress: onStaff,
+        style: styles.staffButton,
+        children: [/*#__PURE__*/jsx(Ionicons, {
+          name: "shield-checkmark-outline",
+          size: 18,
+          color: "#8B8178"
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.staffButtonText,
+          children: "Для сотрудников"
+        })]
+      })]
+    });
     return /*#__PURE__*/jsxs(KeyboardAwareScrollView, {
       contentContainerStyle: styles.content,
       baseBottomPadding: 118,
@@ -611,10 +936,7 @@ export function GuestApp({
           balance: guest.bonus_balance,
           level: guest.loyalty_level,
           onPress: onShowLevel
-        }), guestSession?.token ? /*#__PURE__*/jsx(GuestTimelinePanel, {
-          apiUrl: guestSession.apiUrl,
-          token: guestSession.token
-        }) : null, /*#__PURE__*/jsxs(Card, {
+        }), /*#__PURE__*/jsxs(Card, {
           children: [/*#__PURE__*/jsx(Text, {
             style: styles.cardTitleDark,
             children: "\u041F\u0435\u0440\u0441\u043E\u043D\u0430\u043B\u044C\u043D\u044B\u0435 \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0435\u043D\u0438\u044F"
@@ -693,7 +1015,7 @@ export function GuestApp({
       })]
     });
   }
-  function GuestHomeScreen(_ref4) {
+  function GuestRestaurantScreen(_ref4) {
     var offline = _ref4.offline,
       popular = _ref4.popular,
       guestSession = _ref4.guestSession,
@@ -791,14 +1113,15 @@ export function GuestApp({
       guestSession = _ref5.guestSession,
       guestProfile = _ref5.guestProfile,
       items = _ref5.items,
+      loading = _ref5.loading,
       offline = _ref5.offline,
       query = _ref5.query,
       onCategory = _ref5.onCategory,
-      onCheckedIn = _ref5.onCheckedIn,
-      onOrder = _ref5.onOrder,
-      onQuery = _ref5.onQuery;
-    var currentTableSession = guestProfile?.current_table_session ?? null;
-    var orderItems = guestProfile?.current_order_items ?? [];
+      onDishPress = _ref5.onDishPress,
+      onQuery = _ref5.onQuery,
+      onRefresh = _ref5.onRefresh;
+    var currentTableSession = null;
+    var orderItems = [];
     var menuPromos = [{
       title: 'Сеты для компании',
       text: 'Тёплые блюда для общего стола',
@@ -839,11 +1162,7 @@ export function GuestApp({
       }), offline ? /*#__PURE__*/jsx(Text, {
         style: styles.notice,
         children: "\u041F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u043C \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0435\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043D\u043D\u043E\u0435 \u043C\u0435\u043D\u044E."
-      }) : null, guestSession?.token ? /*#__PURE__*/jsx(GuestCheckInPanel, {
-        apiUrl: guestSession.apiUrl,
-        token: guestSession.token,
-        onCheckedIn: onCheckedIn
-      }) : null, currentTableSession ? /*#__PURE__*/jsxs(Card, {
+      }) : null, null, currentTableSession ? /*#__PURE__*/jsxs(Card, {
         tone: "soft",
         children: [/*#__PURE__*/jsx(Text, {
           style: styles.cardTitleDark,
@@ -918,15 +1237,96 @@ export function GuestApp({
         }, item))
       }), items.length ? items.map(item => /*#__PURE__*/jsx(MemoGuestDishCard, {
         item: item,
-        onOrder: currentTableSession ? onOrder : null
+        onPress: () => onDishPress(item)
       }, item.id)) : /*#__PURE__*/jsxs(Card, {
         tone: "soft",
         children: [/*#__PURE__*/jsx(Text, {
           style: styles.cardTitleDark,
-          children: query ? "\u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u043E" : "\u041C\u0435\u043D\u044E \u0441\u043A\u043E\u0440\u043E \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F"
+          children: query ? "\u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u043E" : loading ? "\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u0435\u043C \u043C\u0435\u043D\u044E" : "\u041C\u0435\u043D\u044E \u0441\u043A\u043E\u0440\u043E \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F"
         }), /*#__PURE__*/jsx(Text, {
           style: styles.mutedDark,
-          children: query ? "\u041F\u043E\u0438\u0449\u0438\u0442\u0435 \u043F\u043E \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044E, \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438 \u0438\u043B\u0438 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u044E." : "\u041A\u043E\u0433\u0434\u0430 \u0441\u0435\u0440\u0432\u0435\u0440 \u043E\u0442\u0434\u0430\u0441\u0442 \u043F\u043E\u0437\u0438\u0446\u0438\u0438, \u043E\u043D\u0438 \u043F\u043E\u044F\u0432\u044F\u0442\u0441\u044F \u0437\u0434\u0435\u0441\u044C \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438."
+          children: query ? "\u041F\u043E\u0438\u0449\u0438\u0442\u0435 \u043F\u043E \u043D\u0430\u0437\u0432\u0430\u043D\u0438\u044E, \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438 \u0438\u043B\u0438 \u043E\u043F\u0438\u0441\u0430\u043D\u0438\u044E." : loading ? "\u041F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u043C \u0434\u043E\u0441\u0442\u0443\u043F \u043A \u0441\u0435\u0440\u0432\u0435\u0440\u0443." : "\u041A\u043E\u0433\u0434\u0430 \u0441\u0435\u0440\u0432\u0435\u0440 \u043E\u0442\u0434\u0430\u0441\u0442 \u043F\u043E\u0437\u0438\u0446\u0438\u0438, \u043E\u043D\u0438 \u043F\u043E\u044F\u0432\u044F\u0442\u0441\u044F \u0437\u0434\u0435\u0441\u044C \u0430\u0432\u0442\u043E\u043C\u0430\u0442\u0438\u0447\u0435\u0441\u043A\u0438."
+        }), !loading ? /*#__PURE__*/jsx(SecondaryButton, {
+          title: "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u043C\u0435\u043D\u044E",
+          onPress: onRefresh
+        }) : null]
+      })]
+    });
+  }
+  function GuestBonusScreen(_refBonus) {
+    var offline = _refBonus.offline,
+      profile = _refBonus.profile,
+      onCopyCode = _refBonus.onCopyCode,
+      onLogin = _refBonus.onLogin,
+      onRefresh = _refBonus.onRefresh,
+      onRegister = _refBonus.onRegister,
+      onShowCode = _refBonus.onShowCode,
+      onShowLevel = _refBonus.onShowLevel,
+      onShareCode = _refBonus.onShareCode;
+    var guest = profile?.guest ?? null;
+    return /*#__PURE__*/jsxs(KeyboardAwareScrollView, {
+      contentContainerStyle: styles.content,
+      baseBottomPadding: 118,
+      showsVerticalScrollIndicator: false,
+      keyboardShouldPersistTaps: "handled",
+      contentInsetAdjustmentBehavior: "automatic",
+      children: [/*#__PURE__*/jsxs(View, {
+        style: styles.headerLine,
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.brand,
+          children: "Горы"
+        }), offline ? /*#__PURE__*/jsx(Text, {
+          style: styles.offlineBadge,
+          children: "нет связи"
+        }) : null]
+      }), /*#__PURE__*/jsx(Text, {
+        style: styles.screenTitle,
+        children: "Бонусная карта"
+      }), guest ? /*#__PURE__*/jsxs(Fragment, {
+        children: [/*#__PURE__*/jsx(BonusCard, {
+          profile: profile
+        }), /*#__PURE__*/jsx(LoyaltyProgress, {
+          balance: guest.bonus_balance,
+          level: guest.loyalty_level,
+          onPress: onShowLevel
+        }), /*#__PURE__*/jsxs(View, {
+          style: styles.rowButtons,
+          children: [/*#__PURE__*/jsx(SecondaryButton, {
+            title: "Скопировать код",
+            onPress: onCopyCode
+          }), /*#__PURE__*/jsx(SecondaryButton, {
+            title: "Поделиться",
+            onPress: onShareCode
+          }), /*#__PURE__*/jsx(SecondaryButton, {
+            title: "QR-код",
+            onPress: onShowCode
+          })]
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.sectionTitle,
+          children: "История бонусов"
+        }), (profile?.transactions ?? []).slice(0, 12).map(transaction => /*#__PURE__*/jsx(TransactionLine, {
+          transaction: transaction
+        }, transaction.id)), /*#__PURE__*/jsx(SecondaryButton, {
+          title: "Обновить карту",
+          onPress: onRefresh
+        })]
+      }) : /*#__PURE__*/jsxs(Card, {
+        tone: "soft",
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.cardTitleDark,
+          children: "Войдите в гостевой профиль"
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.mutedDark,
+          children: "После входа здесь будет бонусная карта, баланс, QR-код, реферальный код и история начислений."
+        }), /*#__PURE__*/jsxs(View, {
+          style: styles.rowButtons,
+          children: [/*#__PURE__*/jsx(PrimaryButton, {
+            title: "Войти",
+            onPress: onLogin
+          }), /*#__PURE__*/jsx(SecondaryButton, {
+            title: "Регистрация",
+            onPress: onRegister
+          })]
         })]
       })]
     });
@@ -1231,12 +1631,65 @@ export function GuestApp({
       }, tier.key))]
     });
   }
+  function DishDetailModal(_refDishDetail) {
+    var item = _refDishDetail.item,
+      visible = _refDishDetail.visible,
+      onClose = _refDishDetail.onClose;
+    if (!item) {
+      return /*#__PURE__*/jsx(ModalSheet, {
+        visible: false,
+        title: "",
+        onClose: onClose
+      });
+    }
+    return /*#__PURE__*/jsx(ModalSheet, {
+      visible: visible,
+      title: item.name,
+      onClose: onClose,
+      children: /*#__PURE__*/jsxs(View, {
+        children: [item.photo_url ? /*#__PURE__*/jsx(Image, {
+          source: { uri: item.photo_url },
+          style: styles.dishDetailImage
+        }) : /*#__PURE__*/jsx(LinearGradient, {
+          colors: ['#533126', '#9b5534'],
+          style: styles.dishDetailImage,
+          children: /*#__PURE__*/jsx(Ionicons, {
+            name: "restaurant-outline",
+            size: 54,
+            color: "#fff6df"
+          })
+        }), /*#__PURE__*/jsxs(View, {
+          style: styles.cardHeader,
+          children: [/*#__PURE__*/jsx(Text, {
+            style: styles.dishDetailTitle,
+            children: item.name
+          }), /*#__PURE__*/jsxs(Text, {
+            style: styles.price,
+            children: [item.price, " ₽"]
+          })]
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.mutedDark,
+          children: item.description || item.composition || "Описание скоро появится"
+        }), item.composition ? /*#__PURE__*/jsx(InfoRow, {
+          icon: "leaf-outline",
+          text: item.composition
+        }) : null, item.weight ? /*#__PURE__*/jsx(InfoRow, {
+          icon: "scale-outline",
+          text: item.weight
+        }) : null, !item.is_available ? /*#__PURE__*/jsx(Pill, {
+          label: item.guest_status_text ?? "Временно недоступно",
+          tone: "warn"
+        }) : null]
+      })
+    });
+  }
   function GuestDishCard(_ref9) {
     var item = _ref9.item,
       compact = _ref9.compact,
-      onOrder = _ref9.onOrder;
+      onPress = _ref9.onPress;
     var badges = [Number(item.popularity ?? 0) >= 80 ? 'Популярное' : null, Number(item.spice_level ?? 0) > 0 ? 'Острое' : null, item.status === 'new' ? 'Новинка' : null, !item.is_available ? 'Временно недоступно' : null].filter(Boolean);
-    return /*#__PURE__*/jsx(Card, {
+    return /*#__PURE__*/jsx(Pressable, {
+      onPress: onPress,
       children: /*#__PURE__*/jsxs(View, {
         style: styles.dishRow,
         children: [/*#__PURE__*/jsx(LinearGradient, {
@@ -1271,15 +1724,7 @@ export function GuestApp({
               children: badge
             }, badge))]
           })]
-        }), onOrder && item.is_available ? /*#__PURE__*/jsx(Pressable, {
-          onPress: () => onOrder(item.id),
-          style: styles.addDishButton,
-          children: /*#__PURE__*/jsx(Ionicons, {
-            name: "add",
-            size: 24,
-            color: "#FFF8EA"
-          })
-        }) : /*#__PURE__*/jsx(Ionicons, {
+        }), /*#__PURE__*/jsx(Ionicons, {
           name: "chevron-forward",
           size: 22,
           color: "#B7B1AA"
@@ -1453,7 +1898,7 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
           value: form.phone,
           onChangeText: phone => setForm({
             ...form,
-            phone
+            phone: formatRussianPhoneInput(phone)
           }),
           placeholder: "+7 900 000-00-00",
           keyboardType: "phone-pad"
@@ -1529,7 +1974,7 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
       if (!visible || !guest) return;
       setForm({
         name: guest.name ?? '',
-        phone: guest.phone ?? '',
+        phone: formatRussianPhoneInput(guest.phone ?? ''),
         birthday: guest.birthday ?? '',
         email: guest.email ?? '',
         marketingConsent: Boolean(guest.marketing_consent)
@@ -1555,7 +2000,7 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
           value: form.phone,
           onChangeText: phone => setForm({
             ...form,
-            phone
+            phone: formatRussianPhoneInput(phone)
           }),
           keyboardType: "phone-pad"
         }), /*#__PURE__*/jsx(BirthdayPickerField, {
@@ -2434,6 +2879,93 @@ const styles = StyleSheet.create({
       lineHeight: 13,
       fontWeight: '800',
       textAlign: 'center'
+    },
+    feedContent: {
+      paddingHorizontal: 18,
+      paddingTop: 18,
+      paddingBottom: 118,
+      gap: 14
+    },
+    feedMediaFrame: {
+      width: '100%',
+      minHeight: 320,
+      borderRadius: 8,
+      overflow: 'hidden',
+      marginBottom: 12,
+      backgroundColor: '#231916'
+    },
+    feedMedia: {
+      width: '100%',
+      height: 360
+    },
+    feedPlayBadge: {
+      position: 'absolute',
+      left: 14,
+      bottom: 14,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'rgba(0,0,0,0.52)'
+    },
+    newsActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      marginTop: 12
+    },
+    newsActionButton: {
+      minHeight: 40,
+      minWidth: 66,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      backgroundColor: 'rgba(74,42,29,0.07)'
+    },
+    newsActionText: {
+      color: palette.ink,
+      fontSize: 13,
+      fontWeight: '900'
+    },
+    commentLine: {
+      marginTop: 10,
+      paddingTop: 10,
+      borderTopWidth: 1,
+      borderTopColor: 'rgba(74,42,29,0.1)'
+    },
+    commentAuthor: {
+      color: palette.ink,
+      fontSize: 13,
+      fontWeight: '900'
+    },
+    commentText: {
+      marginTop: 2,
+      color: palette.inkMuted,
+      fontSize: 13,
+      lineHeight: 18
+    },
+    commentComposer: {
+      marginTop: 12,
+      gap: 8
+    },
+    dishDetailImage: {
+      width: '100%',
+      height: 280,
+      borderRadius: 8,
+      marginBottom: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#533126'
+    },
+    dishDetailTitle: {
+      flex: 1,
+      color: palette.ink,
+      fontSize: 22,
+      fontWeight: '900'
     },
     navTextActive: {
       color: '#24201D'

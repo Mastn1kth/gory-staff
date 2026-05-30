@@ -14,6 +14,7 @@ const ALL_SECTIONS = [
   'profile',
   'admin',
   'analytics',
+  'smm',
   'announcements',
   'rules',
   'chat',
@@ -39,19 +40,21 @@ const roleDefinitions = {
     id: 'role-owner',
     name: 'owner',
     label: 'Владелец',
-    sections: ['analytics', 'clients', 'staff', 'schedule', 'home', 'notifications', 'profile'],
+    sections: ['analytics', 'clients', 'staff', 'schedule', 'home', 'smm', 'notifications', 'profile'],
     permissions: [
       'view:analytics',
       'view:clients',
       'view:staff',
       'view:schedule',
       'view:home',
+      'view:smm',
       'view:notifications',
       'view:profile',
       'manage:clients',
       'manage:staff',
       'manage:roles',
       'manage:schedule',
+      'manage:social_feed',
     ],
   },
   manager: {
@@ -73,6 +76,7 @@ const roleDefinitions = {
       'tasks',
       'notifications',
       'profile',
+      'smm',
       'announcements',
       'rules',
       'chat',
@@ -92,6 +96,7 @@ const roleDefinitions = {
       'view:notifications',
       'view:profile',
       'view:analytics',
+      'view:smm',
       'view:announcements',
       'view:rules',
       'view:chat',
@@ -107,6 +112,7 @@ const roleDefinitions = {
       'manage:events',
       'manage:tasks',
       'manage:supply_requests',
+      'manage:social_feed',
       'manage:announcements',
       'manage:rules',
       'chat:pin_shift',
@@ -133,6 +139,13 @@ const roleDefinitions = {
       'manage:tasks',
       'manage:events',
     ],
+  },
+  smm_manager: {
+    id: 'role-smm-manager',
+    name: 'smm_manager',
+    label: 'SMM РјРµРЅРµРґР¶РµСЂ',
+    sections: ['smm', 'notifications', 'profile'],
+    permissions: ['view:smm', 'manage:social_feed', 'view:notifications', 'view:profile'],
   },
   hostess: {
     id: 'role-hostess',
@@ -283,8 +296,8 @@ function targetGroupsForRole(role) {
   if (['administrator', 'hostess', 'waiter', 'manager', 'technician'].includes(role)) groups.push('hall');
   if (['chef', 'cook', 'manager', 'technician'].includes(role)) groups.push('kitchen');
   if (['bar', 'manager', 'technician'].includes(role)) groups.push('bar');
-  if (['hostess', 'waiter', 'chef', 'cook', 'bar', 'administrator', 'manager', 'technician'].includes(role)) groups.push('events');
-  if (['owner', 'manager', 'administrator', 'technician'].includes(role)) groups.push('management');
+  if (['hostess', 'waiter', 'chef', 'cook', 'bar', 'administrator', 'manager', 'smm_manager', 'technician'].includes(role)) groups.push('events');
+  if (['owner', 'manager', 'administrator', 'smm_manager', 'technician'].includes(role)) groups.push('management');
   if (role === 'technician') groups.push('hostess');
   if (role === 'manager') groups.push('hostess');
   return [...new Set(groups)];
@@ -297,6 +310,7 @@ function chatIdsForRole(role) {
     owner: ['chat-general', 'chat-admins', 'chat-management'],
     manager: ['chat-general', 'chat-hall', 'chat-kitchen', 'chat-bar', 'chat-hostess', 'chat-admins', 'chat-management', 'chat-events', 'chat-shift'],
     administrator: ['chat-general', 'chat-hall', 'chat-kitchen', 'chat-bar', 'chat-hostess', 'chat-admins', 'chat-management', 'chat-events', 'chat-shift'],
+    smm_manager: ['chat-general', 'chat-admins', 'chat-management', 'chat-events'],
     hostess: ['chat-general', 'chat-hall', 'chat-hostess', 'chat-events', 'chat-shift'],
     waiter: ['chat-general', 'chat-hall', 'chat-events', 'chat-shift'],
     chef: ['chat-general', 'chat-kitchen', 'chat-events', 'chat-shift'],
