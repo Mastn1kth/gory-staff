@@ -3,9 +3,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { memo, useMemo } from 'react';
 import { Pressable, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
+import { NetworkQualityIndicator } from '../components/NetworkQualityIndicator';
 import { renderSection, type MutationFn } from './sections';
 import { prioritySections, sectionDefinitions } from '../data/permissions';
 import type { OfflineQueueStatus } from '../data/api';
+import { haptics } from '../utils/haptics';
 import { palette } from '../theme';
 import type { DataSnapshot, SectionKey, User } from '../types';
 
@@ -116,10 +118,14 @@ export function AppShell({
           <Text style={[styles.headerTitle, compact ? styles.headerTitleCompact : null]} numberOfLines={1}>{active.label}</Text>
         </View>
         <View style={styles.headerActions}>
+          <NetworkQualityIndicator apiUrl={apiUrl} />
           {hostessSection ? (
             <Pressable
               accessibilityLabel="Хостес"
-              onPress={() => onSectionChange(hostessSection)}
+              onPress={() => {
+                haptics.selection();
+                onSectionChange(hostessSection);
+              }}
               style={({ pressed }) => [styles.bellButton, safeActiveSection === hostessSection ? styles.bellButtonActive : null, pressed ? styles.pressed : null]}
             >
               <Ionicons name="people-circle" size={20} color={safeActiveSection === hostessSection ? palette.ink : palette.textOnDark} />
@@ -127,7 +133,10 @@ export function AppShell({
           ) : null}
           {canOpenNotifications ? (
             <Pressable
-              onPress={() => onSectionChange('notifications')}
+              onPress={() => {
+                haptics.selection();
+                onSectionChange('notifications');
+              }}
               style={({ pressed }) => [styles.bellButton, safeActiveSection === 'notifications' ? styles.bellButtonActive : null, pressed ? styles.pressed : null]}
             >
               <Ionicons name="notifications" size={19} color={safeActiveSection === 'notifications' ? palette.ink : palette.textOnDark} />
@@ -142,7 +151,10 @@ export function AppShell({
           ) : null}
           {canOpenProfile ? (
             <Pressable
-              onPress={() => onSectionChange('profile')}
+              onPress={() => {
+                haptics.selection();
+                onSectionChange('profile');
+              }}
               style={({ pressed }) => [styles.bellButton, safeActiveSection === 'profile' ? styles.bellButtonActive : null, pressed ? styles.pressed : null]}
             >
               <Ionicons name="person" size={19} color={safeActiveSection === 'profile' ? palette.ink : palette.textOnDark} />
@@ -268,8 +280,12 @@ const NavButton = memo(function NavButton({
   badge?: number;
 }) {
   const label = role === 'bar' && section.key === 'menu' ? 'Бар' : side ? section.label : section.shortLabel;
+  const handlePress = () => {
+    haptics.selection();
+    onPress();
+  };
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [side ? styles.sideButton : styles.navButton, compact ? styles.navButtonCompact : null, active ? styles.navButtonActive : null, pressed ? styles.pressed : null]}>
+    <Pressable onPress={handlePress} style={({ pressed }) => [side ? styles.sideButton : styles.navButton, compact ? styles.navButtonCompact : null, active ? styles.navButtonActive : null, pressed ? styles.pressed : null]}>
       <View>
         <Ionicons name={section.icon as keyof typeof Ionicons.glyphMap} size={side ? 20 : 21} color={active ? palette.ink : palette.textMutedOnDark} />
         {badge > 0 ? (

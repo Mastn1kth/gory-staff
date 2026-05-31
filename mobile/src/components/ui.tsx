@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 
 import { palette, radius, shadow } from '../theme';
+import { haptics } from '../utils/haptics';
 import { keyboardAwareBottomPadding } from './keyboardAvoidance';
 import { nextPasswordVisible, passwordSecureTextEntry } from './passwordVisibility';
 
@@ -66,10 +67,17 @@ export function PrimaryButton({
   disabled?: boolean;
   compact?: boolean;
 }) {
+  const handlePress = useCallback(() => {
+    if (!disabled) {
+      haptics.medium();
+      onPress?.();
+    }
+  }, [disabled, onPress]);
+
   return (
     <Pressable
       disabled={disabled}
-      onPress={onPress}
+      onPress={handlePress}
       style={({ pressed }) => [
         styles.primaryButton,
         compact ? styles.compactButton : null,
@@ -93,9 +101,14 @@ export function SecondaryButton({
   danger?: boolean;
   compact?: boolean;
 }) {
+  const handlePress = useCallback(() => {
+    haptics.light();
+    onPress?.();
+  }, [onPress]);
+
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
       style={({ pressed }) => [
         styles.secondaryButton,
         compact ? styles.compactButton : null,
@@ -272,6 +285,7 @@ export function Field({ label, style, onFocus, ...props }: TextInputProps & { la
     [onFocus, requestKeyboardLift],
   );
   const togglePasswordVisibility = useCallback(() => {
+    haptics.light();
     setPasswordVisible((current) => nextPasswordVisible(current));
   }, []);
 

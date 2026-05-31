@@ -174,7 +174,7 @@ export function ClientsScreen({
 }) {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<GuestUser | null>(null);
-  const [operation, setOperation] = useState<'manual_add' | 'manual_remove' | 'iiko_redeem'>('manual_add');
+  const [operation, setOperation] = useState<'manual_add' | 'manual_remove' | 'iiko_redeem' | 'code_redeem'>('manual_add');
   const [amount, setAmount] = useState('300');
   const [iikoOrderAmount, setIikoOrderAmount] = useState('');
   const [iikoOrderId, setIikoOrderId] = useState('');
@@ -184,6 +184,9 @@ export function ClientsScreen({
   const [sortMode, setSortMode] = useState<'updated' | 'bonus' | 'created' | 'activity'>('updated');
   const [quickFilter, setQuickFilter] = useState<'all' | 'birthday' | 'sleeping' | 'referral'>('all');
   const [noteDraft, setNoteDraft] = useState('');
+  const [bonusCode, setBonusCode] = useState('');
+  const [codeVerification, setCodeVerification] = useState<any>(null);
+  const [codeVerifying, setCodeVerifying] = useState(false);
 
   const canViewClients = ['technician', 'owner', 'manager'].includes(currentUser.role);
   const clients = snapshot.guest_clients ?? [];
@@ -238,7 +241,48 @@ export function ClientsScreen({
       ? 'Начислить бонусы'
       : operation === 'iiko_redeem'
         ? 'Списать бонусы к iiko-заказу'
-        : 'Списать бонусы';
+        : operation === 'code_redeem'
+          ? 'Списать бонусы по коду'
+          : 'Списать бонусы';
+
+  async function verifyCode() {
+    if (!bonusCode.trim()) return;
+    setCodeVerifying(true);
+    try {
+      const result = await onMutate('POST', '/admin/bonus/verify-code', { code: bonusCode.trim() }) as any;
+      setCodeVerification(result);
+      setAmount(String(result?.guest?.bonus_balance ?? 0));
+      setIikoOrderAmount('');
+    } catch (error) {
+      setCodeVerification({ error: error instanceof Error ? error.message : 'Код недействителен' });
+    } finally {
+      setCodeVerifying(false);
+    }
+  }
+
+  async function redeemByCode() {
+    if (!codeVerification?.valid || !bonusCode.trim()) return;
+    const redeemAmount = Math.round(numberFromInput(amount));
+    const orderAmount = Math.round(numberFromInput(iikoOrderAmount));
+    if (redeemAmount <= 0 || orderAmount <= 0) return;
+
+    try {
+      await onMutate('POST', '/admin/bonus/redeem-by-code', {
+        code: bonusCode.trim(),
+        amount: redeemAmount,
+        order_amount: orderAmount,
+        reason: reason.trim() || 'Списание бонусов по коду',
+      });
+      setOperation('manual_add');
+      setBonusCode('');
+      setCodeVerification(null);
+      setAmount('300');
+      setIikoOrderAmount('');
+      setReason('');
+    } catch (error) {
+      throw error;
+    }
+  }
 
   if (!canViewClients) {
     return (
@@ -264,6 +308,11 @@ export function ClientsScreen({
           <SecondaryButton title={`Давно не были: ${sleepingClients}`} compact onPress={() => setQuickFilter('sleeping')} />
           <SecondaryButton title={`Рефералы: ${referralClients}`} compact onPress={() => setQuickFilter('referral')} />
         </View>
+      </Card>
+      <Card>
+        <Text style={styles.cardTitle}>Списание бонусов по коду</Text>
+        <Text style={styles.mutedText}>Гость показывает временный QR-код или 6-значный код из приложения.</Text>
+        <PrimaryButton title="Списать бонусы по коду" onPress={() => setOperation('code_redeem')} />
       </Card>
       <SegmentBroadcastPanel onMutate={onMutate} onSent={() => undefined} />
       <Field label="Поиск" value={search} onChangeText={setSearch} placeholder="Имя, телефон или код" />
@@ -402,10 +451,93 @@ export function ClientsScreen({
         </Card>
       ))}
       <ModalSheet
-        visible={Boolean(selected)}
+        visible={Boolean(selected) || operation === 'code_redeem'}
         title={modalTitle}
-        onClose={() => setSelected(null)}
+        onClose={() => {
+          setSelected(null);
+          setOperation('manual_add');
+          setBonusCode('');
+          setCodeVerification(null);
+        }}
       >
+        {operation === 'code_redeem' ? (
+          <>
+            <Card>
+              <Text style={styles.cardTitle}>Списание бонусов по коду</Text>
+              <Text style={styles.mutedText}>Попросите гостя показать временный QR-код или 6-значный код из приложения.</Text>
+            </Card>
+            <Field
+              label="Код гостя (6 цифр)"
+              value={bonusCode}
+              onChangeText={setBonusCode}
+              keyboardType="number-pad"
+              maxLength={6}
+              placeholder="123456"
+            />
+            <SecondaryButton
+              title={codeVerifying ? "Проверка..." : "Проверить код"}
+              onPress={codeVerifying || bonusCode.length !== 6 ? undefined : verifyCode}
+            />
+            {codeVerification?.error ? (
+              <Card tone="soft">
+                <Text style={styles.mutedText}>❌ {codeVerification.error}</Text>
+              </Card>
+            ) : null}
+            {codeVerification?.valid ? (
+              <>
+                <Card tone="soft">
+                  <Text style={styles.cardTitle}>✅ Гость найден</Text>
+                  <MiniRow title="Имя" text={codeVerification.guest.name} />
+                  <MiniRow title="Телефон" text={codeVerification.guest.phone} />
+                  <MiniRow title="Баланс бонусов" text={`${codeVerification.guest.bonus_balance} бонусов`} />
+                  <MiniRow title="Уровень" text={codeVerification.guest.loyalty_level} />
+                </Card>
+                <Card tone="soft">
+                  <Text style={styles.cardTitle}>Правило списания</Text>
+                  <MiniRow title="Курс" text="1 балл = 1 рубль" />
+                  <MiniRow title="Лимит" text={`Можно списать до 20% от суммы заказа`} />
+                </Card>
+                <Field
+                  label="Сумма заказа (₽)"
+                  value={iikoOrderAmount}
+                  onChangeText={setIikoOrderAmount}
+                  keyboardType="number-pad"
+                  placeholder="1500"
+                />
+                {iikoOrderAmount ? (
+                  <Text style={styles.mutedText}>
+                    Максимум можно списать: {maxIikoBonusAmount(iikoOrderAmount)} бонусов (20% от {iikoOrderAmount} ₽)
+                  </Text>
+                ) : null}
+                <Field
+                  label="Бонусов списать"
+                  value={amount}
+                  onChangeText={setAmount}
+                  keyboardType="number-pad"
+                  placeholder="300"
+                />
+                <Field
+                  label="Причина (необязательно)"
+                  value={reason}
+                  onChangeText={setReason}
+                  placeholder="Списание бонусов по коду"
+                />
+                <PrimaryButton
+                  title="Списать бонусы"
+                  onPress={async () => {
+                    try {
+                      await redeemByCode();
+                    } catch (error) {
+                      // Ошибка будет показана через onMutate
+                    }
+                  }}
+                />
+              </>
+            ) : null}
+          </>
+        ) : null}
+        {selected ? (
+          <>
         <Text style={styles.cardTitle}>{selected?.name}</Text>
         <Text style={styles.mutedText}>{selected?.phone}</Text>
         {selected ? (
@@ -514,6 +646,8 @@ export function ClientsScreen({
             if (result) setSelected(null);
           }}
         />
+          </>
+        ) : null}
       </ModalSheet>
     </ScreenScroll>
   );

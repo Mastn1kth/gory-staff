@@ -123,6 +123,12 @@ function createIikoHttpClient(config, options = {}) {
     async fetchCommandStatus(payload) {
       return await post('/api/1/commands/status', payload);
     },
+    async fetchEmployees(organizationId) {
+      return await post('/api/1/employees', {
+        organizationIds: Array.isArray(organizationId) ? organizationId : [organizationId],
+        includeDeleted: false,
+      });
+    },
   };
 }
 

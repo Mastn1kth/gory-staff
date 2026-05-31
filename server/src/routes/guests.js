@@ -1,3 +1,5 @@
+const { randomInt } = require('crypto');
+
 function registerGuestRoutes(app, deps) {
   const {
     pool,
@@ -22,6 +24,10 @@ function registerGuestRoutes(app, deps) {
     websocketUrlForApi,
     getCoordinationApi,
   } = deps;
+  const routeCache = deps.cache ?? {
+    get: () => null,
+    set: () => {},
+  };
 
   function redemptionOrderAmount(body) {
     const value = Number(body?.order_amount ?? body?.orderAmount ?? body?.order_sum ?? body?.orderSum ?? body?.payment_amount ?? body?.paymentAmount ?? 0);
@@ -43,6 +49,13 @@ function registerGuestRoutes(app, deps) {
   app.get(
     '/guest/menu',
     asyncHandler(async (_req, res) => {
+      // Пробуем получить из кэша
+      const cached = routeCache.get('menu:guest:full');
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+
       const [categories, items, modifierGroups, modifiers] = await Promise.all([
         query('SELECT id, name, sort_order FROM menu_categories ORDER BY sort_order ASC, name ASC'),
         query(
@@ -100,7 +113,7 @@ function registerGuestRoutes(app, deps) {
         ),
       ]);
 
-      res.json({
+      const result = {
         categories: categories.rows,
         items: items.rows.map((item) => ({
           ...item,
@@ -109,7 +122,12 @@ function registerGuestRoutes(app, deps) {
         })),
         modifier_groups: modifierGroups.rows,
         modifiers: modifiers.rows,
-      });
+      };
+
+      // Кэшируем на 5 минут
+      routeCache.set('menu:guest:full', result, 300);
+
+      res.json(result);
     }),
   );
 
@@ -352,6 +370,140 @@ function registerGuestRoutes(app, deps) {
         [req.guest.id, limit, offset],
       );
       res.json({ items: result.rows, limit, offset });
+    }),
+  );
+
+  app.get(
+    '/guest/bonus/redemption-token',
+    guestAuthMiddleware,
+    asyncHandler(async (req, res) => {
+      const client = await pool.connect();
+      try {
+        // Проверяем активный токен
+        const existing = await client.query(
+          `SELECT id, short_code, created_at, expires_at, status
+           FROM guest_bonus_redemption_tokens
+           WHERE guest_id = $1 AND status = 'active' AND expires_at > NOW()
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [req.guest.id],
+        );
+
+        if (existing.rows[0]) {
+          const token = existing.rows[0];
+          res.json({
+            short_code: token.short_code,
+            expires_at: token.expires_at,
+            created_at: token.created_at,
+          });
+          return;
+        }
+
+        // Создаём новый токен
+        const crypto = require('crypto');
+        const tokenId = randomUUID();
+        const rawToken = `${tokenId}-${Date.now()}-${crypto.randomBytes(16).toString('hex')}`;
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+        // Генерируем уникальный короткий код (6 цифр)
+        let shortCode = null;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const candidate = String(randomInt(100000, 1000000));
+          const check = await client.query(
+            'SELECT id FROM guest_bonus_redemption_tokens WHERE short_code = $1 AND status = $2',
+            [candidate, 'active'],
+          );
+          if (!check.rows[0]) {
+            shortCode = candidate;
+            break;
+          }
+        }
+
+        if (!shortCode) throw httpError('Не удалось сгенерировать уникальный код. Попробуйте ещё раз.', 500);
+
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 минут
+
+        const result = await client.query(
+          `INSERT INTO guest_bonus_redemption_tokens
+             (id, guest_id, token_hash, short_code, created_at, expires_at, status)
+           VALUES ($1, $2, $3, $4, NOW(), $5, 'active')
+           RETURNING id, short_code, created_at, expires_at, status`,
+          [tokenId, req.guest.id, tokenHash, shortCode, expiresAt],
+        );
+
+        const token = result.rows[0];
+        res.json({
+          short_code: token.short_code,
+          expires_at: token.expires_at,
+          created_at: token.created_at,
+        });
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  app.post(
+    '/guest/bonus/redemption-token/refresh',
+    guestAuthMiddleware,
+    asyncHandler(async (req, res) => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Деактивируем старые токены
+        await client.query(
+          `UPDATE guest_bonus_redemption_tokens
+           SET status = 'expired'
+           WHERE guest_id = $1 AND status = 'active'`,
+          [req.guest.id],
+        );
+
+        // Создаём новый токен
+        const crypto = require('crypto');
+        const tokenId = randomUUID();
+        const rawToken = `${tokenId}-${Date.now()}-${crypto.randomBytes(16).toString('hex')}`;
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+        let shortCode = null;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const candidate = String(randomInt(100000, 1000000));
+          const check = await client.query(
+            'SELECT id FROM guest_bonus_redemption_tokens WHERE short_code = $1 AND status = $2',
+            [candidate, 'active'],
+          );
+          if (!check.rows[0]) {
+            shortCode = candidate;
+            break;
+          }
+        }
+
+        if (!shortCode) throw httpError('Не удалось сгенерировать уникальный код. Попробуйте ещё раз.', 500);
+
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+        const result = await client.query(
+          `INSERT INTO guest_bonus_redemption_tokens
+             (id, guest_id, token_hash, short_code, created_at, expires_at, status)
+           VALUES ($1, $2, $3, $4, NOW(), $5, 'active')
+           RETURNING id, short_code, created_at, expires_at, status`,
+          [tokenId, req.guest.id, tokenHash, shortCode, expiresAt],
+        );
+
+        await client.query('COMMIT');
+
+        const token = result.rows[0];
+        res.json({
+          short_code: token.short_code,
+          expires_at: token.expires_at,
+          created_at: token.created_at,
+        });
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     }),
   );
 

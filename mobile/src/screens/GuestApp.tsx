@@ -3,6 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { VideoView, useVideoPlayer } from 'expo-video';
+import QRCode from 'react-native-qrcode-svg';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as _react from 'react';
 import { jsx, jsxs } from 'react/jsx-runtime';
@@ -24,12 +25,14 @@ import {
 } from 'react-native';
 
 import { GuestBookingPanel } from '../components/GuestBookingPanel';
+import { OAuthButtons } from '../components/OAuthButtons';
 import {
   checkServerConnection,
   getFixedApiUrl,
   getStoredGuestSession,
   guestLogin,
   guestRegister,
+  guestOAuthLogin,
   commentGuestNewsPost,
   likeGuestNewsPost,
   loadGuestMenu,
@@ -180,6 +183,9 @@ export function GuestApp({
     const [referralModalVisible, setReferralModalVisible] = useState(false);
     const [loyaltyModalVisible, setLoyaltyModalVisible] = useState(false);
     const [guestEditVisible, setGuestEditVisible] = useState(false);
+    const [redemptionCodeModalVisible, setRedemptionCodeModalVisible] = useState(false);
+    const [redemptionToken, setRedemptionToken] = useState(null);
+    const [redemptionTokenLoading, setRedemptionTokenLoading] = useState(false);
     useEffect(() => {
       var alive = true;
       async function bootGuest() {
@@ -465,6 +471,27 @@ export function GuestApp({
     async function callRestaurant() {
         await Linking.openURL(`tel:${RESTAURANT_PHONE}`);
 }
+    async function openSupportContact() {
+        try {
+          await Linking.openURL(`tel:${RESTAURANT_PHONE}`);
+        } catch (error) {
+          setGuestMessage('Не удалось открыть телефон.');
+        }
+}
+    async function openTermsOfService() {
+        try {
+          // Можно заменить на реальную ссылку на пользовательское соглашение
+          const termsUrl = 'https://gory-restaurant.ru/terms';
+          const canOpen = await Linking.canOpenURL(termsUrl).catch(() => false);
+          if (canOpen) {
+            await Linking.openURL(termsUrl);
+          } else {
+            setGuestMessage('Пользовательское соглашение: Используя приложение, вы соглашаетесь с условиями обработки персональных данных и бонусной программы ресторана Горы.');
+          }
+        } catch (error) {
+          setGuestMessage('Не удалось открыть пользовательское соглашение.');
+        }
+}
     function copyAddress() {
       Clipboard.setString(RESTAURANT_ADDRESS);
       setGuestMessage('Адрес скопирован.');
@@ -477,6 +504,53 @@ export function GuestApp({
       }
       setStaffVisible(true);
     }
+    async function showRedemptionCode() {
+      if (!guestSession?.token) {
+        setGuestMode('login');
+        setGuestMessage('Войдите в профиль для списания бонусов.');
+        return;
+      }
+      if (guestOffline) {
+        setGuestMessage('Для списания бонусов требуется подключение к интернету.');
+        return;
+      }
+      setRedemptionCodeModalVisible(true);
+      await loadRedemptionToken();
+    }
+    async function loadRedemptionToken() {
+      if (!guestSession?.token) return;
+      setRedemptionTokenLoading(true);
+      try {
+        const { getGuestBonusRedemptionToken } = await import('../data/api');
+        const token = await getGuestBonusRedemptionToken(guestSession);
+        setRedemptionToken(token);
+      } catch (error) {
+        setGuestMessage(error instanceof Error ? error.message : 'Не удалось получить код.');
+      } finally {
+        setRedemptionTokenLoading(false);
+      }
+    }
+    async function refreshRedemptionToken() {
+      if (!guestSession?.token) return;
+      setRedemptionTokenLoading(true);
+      try {
+        const { refreshGuestBonusRedemptionToken } = await import('../data/api');
+        const token = await refreshGuestBonusRedemptionToken(guestSession);
+        setRedemptionToken(token);
+        setGuestMessage('Код обновлён.');
+      } catch (error) {
+        setGuestMessage(error instanceof Error ? error.message : 'Не удалось обновить код.');
+      } finally {
+        setRedemptionTokenLoading(false);
+      }
+    }
+    useEffect(() => {
+      if (!redemptionCodeModalVisible || !guestSession?.token) return;
+      const interval = setInterval(() => {
+        void loadRedemptionToken();
+      }, 5 * 60 * 1000); // Обновляем каждые 5 минут
+      return () => clearInterval(interval);
+    }, [redemptionCodeModalVisible, guestSession?.token]);
     return /*#__PURE__*/jsxs(SafeAreaView, {
       style: styles.app,
       children: [/*#__PURE__*/jsx(StatusBar, {
@@ -573,7 +647,9 @@ export function GuestApp({
               onEditProfile: () => setGuestEditVisible(true),
               onRefresh: () => refreshGuestProfile(),
               onRegister: () => setGuestMode('register'),
-              onStaff: openStaffEntry
+              onStaff: openStaffEntry,
+              onSupportContact: openSupportContact,
+              onTermsOfService: openTermsOfService
             })
           })]
         }), guestOffline || guestSyncing ? /*#__PURE__*/jsxs(View, {
@@ -609,7 +685,15 @@ export function GuestApp({
         visible: guestMode !== null,
         mode: guestMode,
         onClose: () => setGuestMode(null),
-        onSubmit: handleGuestAuth
+        onSubmit: handleGuestAuth,
+        onOAuthSuccess: (session) => {
+          setGuestSession(session);
+          setGuestProfile(session.profile);
+          setGuestMode(null);
+          const provider = session.profile?.guest?.oauth_provider;
+          const providerName = provider === 'yandex' ? 'Яндекс' : provider === 'vk' ? 'ВКонтакте' : 'OAuth';
+          setGuestMessage(`Вход выполнен через ${providerName}`);
+        }
       }), /*#__PURE__*/jsx(ReferralCodeModal, {
         visible: referralModalVisible,
         profile: guestProfile,
@@ -625,6 +709,12 @@ export function GuestApp({
         profile: guestProfile,
         onClose: () => setGuestEditVisible(false),
         onSubmit: handleGuestProfileUpdate
+      }), /*#__PURE__*/jsx(BonusRedemptionCodeModal, {
+        visible: redemptionCodeModalVisible,
+        token: redemptionToken,
+        loading: redemptionTokenLoading,
+        onClose: () => setRedemptionCodeModalVisible(false),
+        onRefresh: refreshRedemptionToken
       }), /*#__PURE__*/jsx(StaffLoginModal, {
         visible: staffVisible,
         loading: staffLoading,
@@ -809,7 +899,9 @@ export function GuestApp({
       onShowCode = _ref3.onShowCode,
       onShowLevel = _ref3.onShowLevel,
       onShareCode = _ref3.onShareCode,
-      onStaff = _ref3.onStaff;
+      onStaff = _ref3.onStaff,
+      onSupportContact = _ref3.onSupportContact,
+      onTermsOfService = _ref3.onTermsOfService;
     var guest = profile?.guest ?? null;
     return /*#__PURE__*/jsxs(KeyboardAwareScrollView, {
       contentContainerStyle: styles.content,
@@ -910,6 +1002,9 @@ export function GuestApp({
       }) : null, guest ? /*#__PURE__*/jsxs(_reactJsxRuntime.Fragment, {
         children: [/*#__PURE__*/jsx(BonusCard, {
           profile: profile
+        }), /*#__PURE__*/jsx(PrimaryButton, {
+          title: "\u041F\u043E\u043A\u0430\u0437\u0430\u0442\u044C QR \u0434\u043B\u044F \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044F \u0431\u043E\u043D\u0443\u0441\u043E\u0432",
+          onPress: showRedemptionCode
         }), /*#__PURE__*/jsx(SecondaryButton, {
           title: "\u0420\u0435\u0434\u0430\u043A\u0442\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u043F\u0440\u043E\u0444\u0438\u043B\u044C",
           onPress: onEditProfile
@@ -954,6 +1049,24 @@ export function GuestApp({
           title: "\u0412\u044B\u0439\u0442\u0438",
           danger: true,
           onPress: onLogout
+        }), /*#__PURE__*/jsxs(Card, {
+          tone: "soft",
+          children: [/*#__PURE__*/jsx(Text, {
+            style: styles.cardTitleDark,
+            children: "\u0418\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u044F \u0438 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0430"
+          }), /*#__PURE__*/jsx(InfoRow, {
+            icon: "document-text-outline",
+            text: "\u041F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044C\u0441\u043A\u043E\u0435 \u0441\u043E\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u0435",
+            onPress: onTermsOfService
+          }), /*#__PURE__*/jsx(InfoRow, {
+            icon: "chatbubbles-outline",
+            text: "\u041D\u0430\u043F\u0438\u0441\u0430\u0442\u044C \u0432 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0443",
+            onPress: onSupportContact
+          }), /*#__PURE__*/jsx(InfoRow, {
+            icon: "call-outline",
+            text: "\u041F\u043E\u0437\u0432\u043E\u043D\u0438\u0442\u044C \u0432 \u0440\u0435\u0441\u0442\u043E\u0440\u0430\u043D",
+            onPress: onSupportContact
+          })]
         })]
       }) : /*#__PURE__*/jsxs(_reactJsxRuntime.Fragment, {
         children: [/*#__PURE__*/jsxs(Card, {
@@ -986,7 +1099,8 @@ export function GuestApp({
             text: "\u0411\u043E\u043D\u0443\u0441\u043D\u0430\u044F \u043F\u0440\u043E\u0433\u0440\u0430\u043C\u043C\u0430"
           }), /*#__PURE__*/jsx(InfoRow, {
             icon: "document-text-outline",
-            text: "\u041F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044C\u0441\u043A\u043E\u0435 \u0441\u043E\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u0435"
+            text: "\u041F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044C\u0441\u043A\u043E\u0435 \u0441\u043E\u0433\u043B\u0430\u0448\u0435\u043D\u0438\u0435",
+            onPress: onTermsOfService
           })]
         }), /*#__PURE__*/jsxs(Card, {
           tone: "soft",
@@ -995,10 +1109,12 @@ export function GuestApp({
             children: "\u041F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0430"
           }), /*#__PURE__*/jsx(InfoRow, {
             icon: "call-outline",
-            text: "\u041F\u043E\u0437\u0432\u043E\u043D\u0438\u0442\u044C \u0432 \u0440\u0435\u0441\u0442\u043E\u0440\u0430\u043D"
+            text: "\u041F\u043E\u0437\u0432\u043E\u043D\u0438\u0442\u044C \u0432 \u0440\u0435\u0441\u0442\u043E\u0440\u0430\u043D",
+            onPress: onSupportContact
           }), /*#__PURE__*/jsx(InfoRow, {
-            icon: "bug-outline",
-            text: "\u0421\u043E\u043E\u0431\u0449\u0438\u0442\u044C \u043E\u0431 \u043E\u0448\u0438\u0431\u043A\u0435"
+            icon: "chatbubbles-outline",
+            text: "\u041D\u0430\u043F\u0438\u0441\u0430\u0442\u044C \u0432 \u043F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0443",
+            onPress: onSupportContact
           })]
         })]
       }), /*#__PURE__*/jsxs(Pressable, {
@@ -1511,31 +1627,6 @@ export function GuestApp({
       })
     });
   }
-  function qrMatrixForCode(code) {
-    var source = String(code || 'GORY').toUpperCase();
-    var size = 21;
-    var cells = [];
-    function finder(x, y, ox, oy) {
-      var dx = x - ox;
-      var dy = y - oy;
-      if (dx < 0 || dy < 0 || dx > 6 || dy > 6) return null;
-      return dx === 0 || dy === 0 || dx === 6 || dy === 6 || dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4;
-    }
-    for (var y = 0; y < size; y += 1) {
-      for (var x = 0; x < size; x += 1) {
-        var marker = finder(x, y, 0, 0);
-        if (marker === null) marker = finder(x, y, size - 7, 0);
-        if (marker === null) marker = finder(x, y, 0, size - 7);
-        if (marker !== null) {
-          cells.push(marker);
-          continue;
-        }
-        var char = source.charCodeAt((x * 3 + y * 5) % source.length) || 71;
-        cells.push((char + x * 11 + y * 7 + x * y) % 6 < 2);
-      }
-    }
-    return cells;
-  }
   function ReferralCodeModal(_ref9) {
     var visible = _ref9.visible,
       profile = _ref9.profile,
@@ -1543,7 +1634,6 @@ export function GuestApp({
       onCopyCode = _ref9.onCopyCode,
       onShareCode = _ref9.onShareCode;
     var code = profile?.referral.code ?? profile?.guest?.referral_code ?? '';
-    var cells = qrMatrixForCode(code);
     return /*#__PURE__*/jsxs(ModalSheet, {
       visible: visible,
       title: "\u041C\u043E\u0439 \u0440\u0435\u0444\u0435\u0440\u0430\u043B\u044C\u043D\u044B\u0439 \u043A\u043E\u0434",
@@ -1562,17 +1652,12 @@ export function GuestApp({
           children: code || 'GOR00000'
         }), /*#__PURE__*/jsx(View, {
           style: styles.qrBox,
-          children: [cells.map((active, index) => /*#__PURE__*/jsx(View, {
-            style: [styles.qrCell, active ? styles.qrCellActive : null]
-          }, index)), /*#__PURE__*/jsxs(View, {
-            style: styles.qrMountainBadge,
-            children: [/*#__PURE__*/jsx(View, {
-              style: styles.qrMountainLine
-            }), /*#__PURE__*/jsx(Text, {
-              style: styles.qrMountainText,
-              children: "\u0413"
-            })]
-          })]
+          children: /*#__PURE__*/jsx(QRCode, {
+            value: code || 'GOR00000',
+            size: 184,
+            color: "#241915",
+            backgroundColor: "#fff8ea"
+          })
         }), /*#__PURE__*/jsx(Text, {
           style: styles.referralHint,
           children: "\u041F\u0440\u0438\u0433\u043B\u0430\u0441\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u0430: \u043E\u043D \u0432\u0432\u043E\u0434\u0438\u0442 \u044D\u0442\u043E\u0442 \u043A\u043E\u0434 \u043F\u0440\u0438 \u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u0438, \u0430 \u0431\u043E\u043D\u0443\u0441\u044B \u043F\u0430\u0434\u0430\u044E\u0442 \u043D\u0430 \u043A\u0430\u0440\u0442\u0443."
@@ -1629,6 +1714,51 @@ export function GuestApp({
           text: benefit
         }, `${tier.key}-${benefit}`))]
       }, tier.key))]
+    });
+  }
+  function BonusRedemptionCodeModal(_ref11) {
+    var visible = _ref11.visible,
+      token = _ref11.token,
+      loading = _ref11.loading,
+      onClose = _ref11.onClose,
+      onRefresh = _ref11.onRefresh;
+    var shortCode = token?.short_code ?? '000000';
+    return /*#__PURE__*/jsxs(ModalSheet, {
+      visible: visible,
+      title: "\u041A\u043E\u0434 \u0434\u043B\u044F \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044F \u0431\u043E\u043D\u0443\u0441\u043E\u0432",
+      onClose: onClose,
+      children: [/*#__PURE__*/jsxs(LinearGradient, {
+        colors: ['#1b1714', '#3a241d', '#7a2638'],
+        style: styles.referralModalCard,
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.referralBrand,
+          children: "\u0413\u043E\u0440\u044B"
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.referralSub,
+          children: "\u041F\u043E\u043A\u0430\u0436\u0438\u0442\u0435 QR \u0438\u043B\u0438 \u043A\u043E\u0434 \u0441\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A\u0443"
+        }), loading ? /*#__PURE__*/jsx(Text, {
+          style: styles.referralBigCode,
+          children: "\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0430..."
+        }) : /*#__PURE__*/jsx(Text, {
+          style: styles.referralBigCode,
+          children: shortCode
+        }), /*#__PURE__*/jsx(View, {
+          style: styles.qrBox,
+          children: /*#__PURE__*/jsx(QRCode, {
+            value: shortCode,
+            size: 184,
+            color: "#241915",
+            backgroundColor: "#fff8ea"
+          })
+        }), /*#__PURE__*/jsx(Text, {
+          style: styles.referralHint,
+          children: "\u041A\u043E\u0434 \u0432\u0440\u0435\u043C\u0435\u043D\u043D\u044B\u0439 \u0438 \u0440\u0435\u0433\u0443\u043B\u044F\u0440\u043D\u043E \u043E\u0431\u043D\u043E\u0432\u043B\u044F\u0435\u0442\u0441\u044F."
+        })]
+      }), /*#__PURE__*/jsx(PrimaryButton, {
+        title: loading ? "\u041E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0435..." : "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u043A\u043E\u0434",
+        disabled: loading,
+        onPress: onRefresh
+      })]
     });
   }
   function DishDetailModal(_refDishDetail) {
@@ -1831,8 +1961,9 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
   }
   function InfoRow(_ref1) {
     var icon = _ref1.icon,
-      text = _ref1.text;
-    return /*#__PURE__*/jsxs(View, {
+      text = _ref1.text,
+      onPress = _ref1.onPress;
+    const content = /*#__PURE__*/jsxs(View, {
       style: styles.infoRow,
       children: [/*#__PURE__*/jsx(Ionicons, {
         name: icon,
@@ -1843,6 +1974,16 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
         children: text
       })]
     });
+
+    if (onPress) {
+      return /*#__PURE__*/jsx(Pressable, {
+        onPress: onPress,
+        style: ({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }],
+        children: content
+      });
+    }
+
+    return content;
   }
   function TransactionLine(_ref10) {
     var transaction = _ref10.transaction;
@@ -1868,17 +2009,20 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
     var visible = _ref11.visible,
       mode = _ref11.mode,
       onClose = _ref11.onClose,
-      onSubmit = _ref11.onSubmit;
+      onSubmit = _ref11.onSubmit,
+      onOAuthSuccess = _ref11.onOAuthSuccess;
     const [form, setForm] = useState({
         name: '',
         phone: '',
         birthday: '',
         referralCode: '',
-        marketingConsent: true
+        marketingConsent: true,
+        termsAccepted: false
       });
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState(null);
     var isRegister = mode === 'register';
+
     return /*#__PURE__*/jsx(ModalSheet, {
       visible: visible,
       title: isRegister ? 'Регистрация гостя' : 'Вход гостя',
@@ -1921,6 +2065,20 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
           }), /*#__PURE__*/jsxs(Pressable, {
             onPress: () => setForm({
               ...form,
+              termsAccepted: !form.termsAccepted
+            }),
+            style: styles.checkboxLine,
+            children: [/*#__PURE__*/jsx(Ionicons, {
+              name: form.termsAccepted ? 'checkbox-outline' : 'square-outline',
+              size: 22,
+              color: palette.burgundy
+            }), /*#__PURE__*/jsx(Text, {
+              style: styles.mutedDark,
+              children: "Я принимаю пользовательское соглашение"
+            })]
+          }), /*#__PURE__*/jsxs(Pressable, {
+            onPress: () => setForm({
+              ...form,
               marketingConsent: !form.marketingConsent
             }),
             style: styles.checkboxLine,
@@ -1938,7 +2096,7 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
           children: message
         }) : null, /*#__PURE__*/jsx(PrimaryButton, {
           title: loading ? 'Подождите...' : isRegister ? 'Создать профиль' : 'Войти',
-          disabled: loading,
+          disabled: loading || (isRegister && !form.termsAccepted),
           onPress: async () => {
             if (!mode) return;
             setLoading(true);
@@ -1951,6 +2109,11 @@ const MemoGuestDishCard = /*#__PURE__*/(0, _react.memo)(GuestDishCard);
               setLoading(false);
             }
           },
+        }), /*#__PURE__*/jsx(OAuthButtons, {
+          apiUrl: getFixedApiUrl(),
+          referralCode: form.referralCode,
+          onSuccess: onOAuthSuccess,
+          onError: (error) => setMessage(error)
         })]
       })
     });
@@ -2430,9 +2593,8 @@ const styles = StyleSheet.create({
     qrBox: {
       width: 206,
       height: 206,
-      position: 'relative',
-      flexDirection: 'row',
-      flexWrap: 'wrap',
+      alignItems: 'center',
+      justifyContent: 'center',
       padding: 8,
       borderRadius: 18,
       backgroundColor: '#fff8ea',

@@ -21,6 +21,7 @@ import {
   StopListScreen,
   TasksScreen,
 } from './screens';
+import { SettingsScreen } from './SettingsScreen';
 import type { SectionProps } from './types';
 
 export type { MutationFn, SectionProps } from './types';
@@ -61,6 +62,8 @@ export function renderSection(section: SectionKey, props: SectionProps) {
       return <NotificationsScreen {...props} />;
     case 'profile':
       return <ProfileScreen {...props} />;
+    case 'settings':
+      return <SettingsScreen apiUrl={props.apiUrl ?? ''} />;
     case 'admin':
       return <AdminScreen {...props} />;
     case 'analytics':

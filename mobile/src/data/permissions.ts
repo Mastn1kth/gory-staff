@@ -23,6 +23,7 @@ export const sectionDefinitions: SectionDefinition[] = [
   { key: 'tasks', label: 'Заявки', shortLabel: 'Заявки', icon: 'checkbox' },
   { key: 'notifications', label: 'Новости', shortLabel: 'Новости', icon: 'notifications' },
   { key: 'profile', label: 'Профиль', shortLabel: 'Профиль', icon: 'person' },
+  { key: 'settings', label: 'Настройки', shortLabel: 'Настройки', icon: 'options' },
   { key: 'admin', label: 'Техчасть', shortLabel: 'Тех', icon: 'settings' },
   { key: 'analytics', label: 'Аналитика', shortLabel: 'Итоги', icon: 'stats-chart' },
   { key: 'about', label: 'О ресторане', shortLabel: 'О нас', icon: 'information-circle' },
@@ -77,7 +78,7 @@ export function prioritySections(role: RoleName, allowed: SectionKey[]): Section
 }
 
 export function labelForRole(role: RoleName): string {
-  if (role === 'smm_manager') return 'SMM РјРµРЅРµРґР¶РµСЂ';
+  if (role === 'smm_manager') return 'SMM менеджер';
   const labels: Partial<Record<RoleName, string>> = {
     pending: 'Новый сотрудник',
     technician: 'Техник системы',

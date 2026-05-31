@@ -32,6 +32,20 @@ ALTER TABLE users
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS iiko_id TEXT;
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS iiko_code TEXT;
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS iiko_is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS iiko_last_seen_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_iiko_id ON users(iiko_id) WHERE iiko_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS shifts (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -257,6 +271,24 @@ ALTER TABLE iiko_sync_log
   ADD COLUMN IF NOT EXISTS modifiers_archived INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_iiko_sync_log_finished ON iiko_sync_log(finished_at DESC);
+
+CREATE TABLE IF NOT EXISTS iiko_staff_sync_log (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL,
+  finished_at TIMESTAMPTZ NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  staff_created INTEGER NOT NULL DEFAULT 0,
+  staff_updated INTEGER NOT NULL DEFAULT 0,
+  staff_archived INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT,
+  trigger_type TEXT DEFAULT 'manual'
+);
+
+COMMENT ON COLUMN iiko_staff_sync_log.trigger_type IS
+  'Тип триггера синхронизации: manual (ручная), scheduled (по расписанию), startup (при старте сервера)';
+
+CREATE INDEX IF NOT EXISTS idx_iiko_staff_sync_log_finished ON iiko_staff_sync_log(finished_at DESC);
 
 CREATE TABLE IF NOT EXISTS notebook_notes (
   id TEXT PRIMARY KEY,
@@ -1026,6 +1058,21 @@ CREATE INDEX IF NOT EXISTS idx_guest_bonus_redemptions_guest_status ON guest_bon
 CREATE INDEX IF NOT EXISTS idx_guest_bonus_redemptions_iiko_order ON guest_bonus_redemptions(iiko_order_id) WHERE iiko_order_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_guest_bonus_redemptions_payment ON guest_bonus_redemptions(iiko_payment_event_id) WHERE iiko_payment_event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_guest_bonus_redemptions_session ON guest_bonus_redemptions(table_session_id, status);
+
+CREATE TABLE IF NOT EXISTS guest_bonus_redemption_tokens (
+  id TEXT PRIMARY KEY,
+  guest_id TEXT NOT NULL REFERENCES guest_users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  short_code TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'active'
+);
+
+CREATE INDEX IF NOT EXISTS idx_bonus_redemption_tokens_guest ON guest_bonus_redemption_tokens(guest_id);
+CREATE INDEX IF NOT EXISTS idx_bonus_redemption_tokens_short_code ON guest_bonus_redemption_tokens(short_code);
+CREATE INDEX IF NOT EXISTS idx_bonus_redemption_tokens_token_hash ON guest_bonus_redemption_tokens(token_hash);
 
 CREATE TABLE IF NOT EXISTS guest_feedback_requests (
   id TEXT PRIMARY KEY,

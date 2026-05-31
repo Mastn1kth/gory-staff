@@ -1,43 +1,45 @@
 {
-    "expo":  {
-                 "name":  "Горы",
-                 "slug":  "gory-staff",
-                 "version":  "0.1.46",
-                 "orientation":  "default",
-                 "icon":  "./assets/icon.png",
-                 "userInterfaceStyle":  "automatic",
-                 "ios":  {
-                             "supportsTablet":  true,
-                             "bundleIdentifier":  "ru.gory.staff"
-                         },
-                 "android":  {
-                                 "package":  "ru.gory.staff",
-                                 "permissions":  [
-                                                     "POST_NOTIFICATIONS"
-                                                 ],
-                                 "versionCode":  47,
-                                 "usesCleartextTraffic":  true,
-                                 "softwareKeyboardLayoutMode":  "resize",
-                                 "adaptiveIcon":  {
-                                                      "foregroundImage":  "./assets/adaptive-icon.png",
-                                                      "backgroundColor":  "#18221F"
-                                                  }
-                             },
-                 "splash":  {
-                                "image":  "./assets/splash.png",
-                                "resizeMode":  "contain",
-                                "backgroundColor":  "#18221F"
-                            },
-                 "plugins":  [
-                                 "expo-notifications",
-                                 "expo-video"
-                             ],
-                 "extra":  {
-                               "eas":  {
-                                           "projectId":  "2b8e0320-5b79-46fc-be0a-5dcea8d90e8f"
-                                       },
-                               "apiUrl":  "https://app.gory-staff.ru"
-                           },
-                 "owner":  "mastn1k"
-             }
+  "expo": {
+    "name": "Горы",
+    "slug": "gory-staff",
+    "scheme": "gory-staff",
+    "version": "0.1.46",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ru.gory.staff"
+    },
+    "android": {
+      "package": "ru.gory.staff",
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ],
+      "versionCode": 47,
+      "usesCleartextTraffic": true,
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#18221F"
+      }
+    },
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#18221F"
+    },
+    "plugins": [
+      "expo-notifications",
+      "expo-video",
+      "expo-web-browser"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "2b8e0320-5b79-46fc-be0a-5dcea8d90e8f"
+      },
+      "apiUrl": "https://app.gory-staff.ru"
+    },
+    "owner": "mastn1k"
+  }
 }

@@ -4,6 +4,7 @@ import { Image, Pressable, StyleSheet, Text, View, type ImageSourcePropType } fr
 import { TableSignalActions } from './TableSignalActions';
 import { ModalSheet, Pill, SecondaryButton } from './ui';
 import { palette, tableStatusColor, tableStatusLabel } from '../theme';
+import { haptics } from '../utils/haptics';
 import type { DataSnapshot, Floor, MutationFn, Reservation, RestaurantTable, TableStatus, User } from '../types';
 
 const floorPlanImages: Record<string, ImageSourcePropType> = {
@@ -140,7 +141,10 @@ export function FloorPlan({
           return (
             <Pressable
               key={table.id}
-              onPress={() => setSelected(table)}
+              onPress={() => {
+                haptics.selection();
+                setSelected(table);
+              }}
               style={({ pressed }) => [
                 styles.table,
                 table.shape === 'round' ? styles.tableRound : null,
@@ -230,6 +234,7 @@ export function FloorPlan({
                 onPress={async () => {
                   await onUpdateTable(selected.id, { status: 'free' });
                   setSelected({ ...selected, status: 'free' });
+                  haptics.success();
                 }}
               />
             ) : null}
@@ -246,6 +251,7 @@ export function FloorPlan({
                       onPress={async () => {
                         await onUpdateTable(selected.id, { status: action.status });
                         setSelected({ ...selected, status: action.status });
+                        haptics.success();
                       }}
                     />
                   ))}

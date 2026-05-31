@@ -1,6 +1,6 @@
 # Горы: контекст проекта для ИИ
 
-Обновлено: 2026-05-30.
+Обновлено: 2026-05-31.
 
 Цель файла: дать следующему ИИ короткий, проверяемый контекст проекта, чтобы он не тратил токены на первичный разбор структуры. Если факты ниже противоречат коду, верить коду и обновить этот документ.
 
@@ -16,7 +16,7 @@
 2. `README.md` - запуск, эксплуатация, текущие пользовательские инструкции.
 3. `docs/ROADMAP.md` - что делать дальше и в каком порядке.
 4. `docs/PROJECT_FULL_STATUS.md` - полный список уже реализованных возможностей.
-5. Документы по конкретной зоне: `docs/IIKO_*.md`, `docs/SOCIAL_IMPORT_SETUP.md`, `docs/TRANSFER_TO_ANOTHER_PC.md`.
+5. Документы по конкретной зоне: `docs/IIKO_*.md`, `docs/OAUTH_SETUP.md`, `docs/RESERVATION_REMINDERS.md`, `docs/SOCIAL_IMPORT_SETUP.md`, `docs/TRANSFER_TO_ANOTHER_PC.md`.
 
 Не читай весь проект вслепую. Сначала найди нужную область через `rg`, потом открывай только связанные файлы.
 
@@ -24,11 +24,13 @@
 
 - `mobile` - Expo React Native приложение «Горы».
 - `server` - Node.js/Express API, Socket.IO, PostgreSQL, seed, роли, права, интеграции.
+- `server/src/cache.js` - система in-memory кэширования для ускорения работы.
+- `server/src/performance-optimizations.sql` - индексы БД для оптимизации запросов.
 - `tools` - Windows/Node/Python утилиты: запуск, остановка, Excel import/export, iiko event connector, Cloudflare relay.
 - `tools\bat` - технические батники запуска и обслуживания.
 - `cloudflare\https-relay` - Cloudflare Worker relay.
 - `gory-control` - PowerShell/C# панель управления.
-- `docs` - проектные документы, чек-листы, roadmap-и, дизайн-превью.
+- `docs` - проектные документы, чек-листы, roadmap-и и дизайн-превью.
 - `data`, `runtime`, `backups`, `builds` - локальные/сгенерированные данные. Не считать их исходниками продукта.
 
 ## Входные точки
@@ -47,7 +49,8 @@
 ## Технологии
 
 - Корень: npm workspaces.
-- Backend: Node.js, Express 5, Socket.IO, PostgreSQL `pg`, `pg-mem` для тестов, JWT, bcrypt, Helmet, CORS, rate limit.
+- Backend: Node.js, Express 5, Socket.IO, PostgreSQL `pg`, `pg-mem` для тестов, JWT, bcrypt, Helmet, CORS, rate limit, compression (gzip).
+- Оптимизации: 60+ индексов БД, in-memory кэш, HTTP compression, оптимизированный connection pool.
 - Mobile: Expo 54, React 19, React Native 0.81, TypeScript, AsyncStorage, Expo notifications, Expo network/device/video, Socket.IO client.
 - БД: PostgreSQL 16 в Docker (`docker-compose.yml`), порт `127.0.0.1:5432`.
 - Публичный доступ: Cloudflare Worker + локальный HTTPS relay, рабочий домен `https://app.gory-staff.ru`.
@@ -81,12 +84,13 @@ npm --workspace server test
 
 ## Ключевые доменные зоны
 
-- Гость: регистрация/вход по телефону, профиль, бонусная карта, история бонусов, рефералы, меню, новости, маршрут, feedback после визита.
+- Гость: регистрация/вход по телефону, **OAuth вход (Яндекс, ВКонтакте)**, профиль, бонусная карта, история бонусов, рефералы, меню, новости, маршрут, feedback после визита.
 - Персонал: роли, права, рабочие разделы, смена, столы, брони, стоп-лист, задачи, банкеты, клиенты, аналитика, профиль.
 - Offline-first: мобильное приложение кэширует гостевые и staff-данные, хранит очередь разрешенных офлайн-действий и отправляет их после восстановления связи.
 - Push: Expo push token, `push_devices`, `notifications`, `notification_settings`, `notification_delivery_log`.
 - iiko: импорт меню/стоп-листа/модификаторов, отправка гостевых заказов в iiko table orders, pull статусов, webhook-и `order-updated` и `payment-paid`, локальный event connector.
 - Social/news: маршруты `server\src\routes\social.js`, импорт и гостевая лента новостей.
+- OAuth: вход гостей через Яндекс и ВКонтакте, автоматическая регистрация, привязка к существующим аккаунтам.
 
 ## API-роуты по файлам
 
@@ -94,6 +98,7 @@ npm --workspace server test
 - `server\src\routes\auth.js` - staff login/register/me/profile.
 - `server\src\routes\sync.js` - мобильный snapshot и синхронизация.
 - `server\src\routes\guests.js` - гостевой профиль, меню, новости, push, бонусы, feedback.
+- `server\src\routes\oauth.js` - OAuth вход через Яндекс и ВКонтакте.
 - `server\src\routes\floor.js` - столы, брони, ожидание, зал.
 - `server\src\routes\menu.js` - меню, стоп-лист, позиции.
 - `server\src\routes\staff.js` - задачи, график, персонал, события, блокнот и рабочие операции.

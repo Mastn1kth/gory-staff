@@ -12,6 +12,7 @@ const ALL_SECTIONS = [
   'tasks',
   'notifications',
   'profile',
+  'settings',
   'admin',
   'analytics',
   'smm',
@@ -143,7 +144,7 @@ const roleDefinitions = {
   smm_manager: {
     id: 'role-smm-manager',
     name: 'smm_manager',
-    label: 'SMM РјРµРЅРµРґР¶РµСЂ',
+    label: 'SMM менеджер',
     sections: ['smm', 'notifications', 'profile'],
     permissions: ['view:smm', 'manage:social_feed', 'view:notifications', 'view:profile'],
   },

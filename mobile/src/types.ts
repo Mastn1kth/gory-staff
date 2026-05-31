@@ -35,6 +35,7 @@ export type SectionKey =
   | 'admin'
   | 'analytics'
   | 'smm'
+  | 'settings'
   | 'about';
 
 export type ApiSession = {
@@ -437,6 +438,7 @@ export type GuestBonusTransaction = {
     | 'correction'
     | 'expired'
     | 'spend'
+    | 'staff_code_redeem'
     | string;
   amount: number;
   balance_before: number;
@@ -451,6 +453,28 @@ export type GuestBonusTransaction = {
   table_session_id?: string | null;
   created_by?: string | null;
   created_at: string;
+};
+
+export type GuestBonusRedemptionToken = {
+  short_code: string;
+  expires_at: string;
+  created_at: string;
+};
+
+export type BonusCodeVerification = {
+  valid: boolean;
+  guest: {
+    id: string;
+    name: string;
+    phone: string;
+    bonus_balance: number;
+    loyalty_level: string;
+  };
+  token: {
+    short_code: string;
+    expires_at: string;
+    created_at: string;
+  };
 };
 
 export type GuestBonusRedemption = {

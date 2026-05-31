@@ -29,6 +29,7 @@ server/src/restaurantSourceData.json
 tools/*.exe
 tools/pinggy_key*
 .idea/
+.vscode/
 .cloudflare-url.txt
 .serveo-url.txt
 eas-build-latest.*
@@ -38,3 +39,17 @@ android/
 ios/
 mobile/android/
 mobile/ios/
+/*_REPORT.md
+/*_SUMMARY.md
+/*_SUMMARY.txt
+/*_COMPLETE.md
+/*_DONE.txt
+/*_QUICK_START.md
+/ALL_IMPROVEMENTS_FINAL.md
+/PROJECT_IMPROVEMENTS_SUMMARY.md
+/TERMS_AND_SUPPORT_FEATURE.md
+/ИТОГИ_РАБОТЫ.txt
+/УМНЫЕ_ВОЗМОЖНОСТИ.txt
+/docs/*_SUMMARY.md
+/docs/*_QUICK_START.md
+/docs/*_COMPLETE.md

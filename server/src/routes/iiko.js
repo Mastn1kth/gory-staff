@@ -1,12 +1,14 @@
 const { timingSafeEqual } = require('crypto');
 const {
   getIikoStatus,
+  getIikoStaffSyncStatus,
   processIikoOrderEvent,
   processIikoPaymentEvent,
   syncGuestOrderToIiko: defaultSyncGuestOrderToIiko,
   syncIikoOrderStatus: defaultSyncIikoOrderStatus,
   syncOpenIikoOrderStatuses: defaultSyncOpenIikoOrderStatuses,
   syncIikoMenu,
+  syncIikoStaff,
 } = require('../integrations/iiko');
 
 function safeEqualText(left, right) {
@@ -52,13 +54,42 @@ function registerIikoRoutes(app, deps) {
   const syncGuestOrderToIiko = deps.syncGuestOrderToIiko || defaultSyncGuestOrderToIiko;
   const syncIikoOrderStatus = deps.syncIikoOrderStatus || defaultSyncIikoOrderStatus;
   const syncOpenIikoOrderStatuses = deps.syncOpenIikoOrderStatuses || defaultSyncOpenIikoOrderStatuses;
+  const getIikoStaffScheduler = deps.iikoStaffScheduler || (() => null);
 
   app.get(
     '/iiko/status',
     authMiddleware,
     requirePermission('manage:menu'),
     asyncHandler(async (_req, res) => {
-      res.json(await getIikoStatus(pool, process.env));
+      const scheduler = typeof getIikoStaffScheduler === 'function' ? getIikoStaffScheduler() : null;
+      const [menuStatus, staffStatus] = await Promise.all([
+        getIikoStatus(pool, process.env),
+        getIikoStaffSyncStatus(pool, process.env, scheduler),
+      ]);
+      res.json({
+        ...menuStatus,
+        staffSync: staffStatus,
+      });
+    }),
+  );
+
+  app.post(
+    '/iiko/sync/staff',
+    authMiddleware,
+    requirePermission('manage:staff'),
+    asyncHandler(async (_req, res) => {
+      const result = await syncIikoStaff({
+        db: pool,
+        env: process.env,
+        randomUUID,
+        logger: console,
+      });
+
+      if (result.status === 'completed') {
+        emitChange('users', 'updated', { iiko_staff_sync: result.staff });
+      }
+
+      res.status(result.status === 'failed' ? 502 : 200).json(result);
     }),
   );
 

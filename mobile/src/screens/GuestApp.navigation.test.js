@@ -93,3 +93,21 @@ test('guest news renders real video media instead of a static play badge only', 
   assert.match(guestAppSource, /VideoView/);
   assert.match(guestAppSource, /useVideoPlayer/);
 });
+
+test('guest bonus and referral QR surfaces use a real QR renderer', () => {
+  assert.match(guestAppSource, /react-native-qrcode-svg/);
+  assert.match(guestAppSource, /QRCode/);
+  assert.doesNotMatch(guestAppSource, /function qrMatrixForCode/);
+  assert.doesNotMatch(guestAppSource, /cells\.map/);
+});
+
+test('guest OAuth starts a mobile deep-link flow and sends the same redirect uri to the server exchange', () => {
+  const oauthSource = fs.readFileSync(path.join(__dirname, '..', 'components', 'OAuthButtons.tsx'), 'utf8');
+
+  assert.match(oauthSource, /gory-staff:\/\/oauth\/\$\{provider\}/);
+  assert.match(oauthSource, /mobile_redirect_uri/);
+  assert.match(oauthSource, /encodeURIComponent\(redirectUri\)/);
+  assert.match(oauthSource, /openAuthSessionAsync\(url,\s*redirectUri\)/);
+  assert.match(oauthSource, /guestOAuthLogin\(apiUrl,\s*provider,\s*code,\s*referralCode,\s*redirectUri\)/);
+  assert.doesNotMatch(oauthSource, /openAuthSessionAsync\(url,\s*`\$\{apiUrl\}\/oauth\/\$\{provider\}\/callback`\)/);
+});

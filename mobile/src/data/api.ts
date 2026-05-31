@@ -6,10 +6,14 @@ import { Platform } from 'react-native';
 import { io } from 'socket.io-client';
 
 import { BUILD_API_URL } from './buildConfig';
+import { getGlobalCircuitBreaker, CircuitBreakerError } from './circuitBreaker';
 import { resolveReachableConnection } from './connectionRecovery';
 import { createRealtimeSyncScheduler, runExclusiveSnapshot } from './syncCoordinator';
 import { orderApiPriorityUrls } from '../utils/connectionCandidates';
 import { normalizeRussianPhoneInput } from '../utils/phoneFormat';
+import { getGlobalRetryStrategy } from './smartRetry';
+import { getGlobalNetworkAdapter } from './networkAdapter';
+import { getGlobalConnectionManager } from './smartConnection';
 import type { ApiSession, DataSnapshot, GuestFeedbackRequest, GuestProfilePayload, MenuItemModifier, MenuItemModifierGroup } from '../types';
 
 const SESSION_KEY = 'gory_staff_session';
@@ -445,17 +449,23 @@ async function fetchWithRetries(url: string, options: RequestInit, timeoutMs = R
   if (await isNetworkClearlyOffline()) {
     throw new ApiError('Нет подключения к интернету.');
   }
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < NETWORK_RETRY_COUNT; attempt += 1) {
-    try {
-      return await fetchWithTimeout(url, { ...options, cache: 'no-store' }, timeoutMs);
-    } catch (error) {
-      lastError = error;
-      if (attempt === NETWORK_RETRY_COUNT - 1) break;
-      await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+
+  // Используем circuit breaker для защиты сервера
+  const circuitBreaker = getGlobalCircuitBreaker();
+
+  return circuitBreaker.execute(async () => {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < NETWORK_RETRY_COUNT; attempt += 1) {
+      try {
+        return await fetchWithTimeout(url, { ...options, cache: 'no-store' }, timeoutMs);
+      } catch (error) {
+        lastError = error;
+        if (attempt === NETWORK_RETRY_COUNT - 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+      }
     }
-  }
-  throw lastError;
+    throw lastError;
+  });
 }
 
 async function pingServer(apiUrl: string, timeoutMs = DISCOVERY_TIMEOUT_MS) {
@@ -512,24 +522,33 @@ async function fetchJson<T>(sessionOrUrl: ApiSession | string | GuestSession, pa
   const apiUrl =
     typeof sessionOrUrl === 'string' ? normalizeApiUrl(sessionOrUrl) : normalizeApiUrl(sessionOrUrl.apiUrl);
   const token = typeof sessionOrUrl === 'string' ? null : sessionOrUrl.token;
-  const response = await fetchWithRetries(`${apiUrl}${path}`, {
-    ...options,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'X-Gory-App': 'mobile',
-      'X-Pinggy-No-Screen': 'true',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers ?? {}),
-    },
-  });
-  const data = await safeJson(response);
-  if (!response.ok) {
-    const message =
-      data && typeof data === 'object' && 'error' in data ? String((data as { error?: unknown }).error) : 'Сервер вернул ошибку.';
-    throw new ApiError(message, response.status, data);
+
+  try {
+    const response = await fetchWithRetries(`${apiUrl}${path}`, {
+      ...options,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Gory-App': 'mobile',
+        'X-Pinggy-No-Screen': 'true',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers ?? {}),
+      },
+    });
+    const data = await safeJson(response);
+    if (!response.ok) {
+      const message =
+        data && typeof data === 'object' && 'error' in data ? String((data as { error?: unknown }).error) : 'Сервер вернул ошибку.';
+      throw new ApiError(message, response.status, data);
+    }
+    return data as T;
+  } catch (error) {
+    // Пробрасываем CircuitBreakerError с понятным сообщением
+    if (error instanceof CircuitBreakerError) {
+      throw new ApiError(error.message, 503);
+    }
+    throw error;
   }
-  return data as T;
 }
 
 function snapshotCacheKey(userId: string) {
@@ -642,6 +661,14 @@ export async function getCacheInfo(): Promise<CacheInfo> {
     guestNewsLastSyncAt: pairs[3]?.[1] ?? null,
     lastSuccessfulConnectionAt: pairs[4]?.[1] ?? null,
   };
+}
+
+/**
+ * Получить статистику circuit breaker
+ */
+export function getCircuitBreakerStats() {
+  const circuitBreaker = getGlobalCircuitBreaker();
+  return circuitBreaker.getStats();
 }
 
 export async function checkServerConnection(apiUrl?: string): Promise<ServerConnectionStatus> {
@@ -890,6 +917,26 @@ export async function guestRegister(
       phone: normalizedPhone,
       platform: Platform.OS,
       personal_data_consent: input.personal_data_consent ?? true,
+    }),
+  });
+  return saveGuestPayload(normalizedUrl, payload);
+}
+
+export async function guestOAuthLogin(
+  apiUrl: string,
+  provider: 'yandex' | 'vk',
+  code: string,
+  referralCode?: string,
+  redirectUri?: string,
+) {
+  const normalizedUrl = await resolveApiUrl(apiUrl || getFixedApiUrl());
+  const payload = await fetchJson<GuestProfilePayload>(normalizedUrl, `/oauth/mobile/${provider}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      code,
+      referral_code: referralCode,
+      redirect_uri: redirectUri,
+      platform: Platform.OS,
     }),
   });
   return saveGuestPayload(normalizedUrl, payload);
@@ -1241,6 +1288,59 @@ export async function sendGuestTestPush(session: GuestSession) {
 
 export async function submitGuestFeedback(session: GuestSession, feedbackRequestId: string, input: { rating: number; comment?: string }) {
   return fetchJson<GuestFeedbackRequest>(session, `/guest/feedback/${feedbackRequestId}`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getGuestBonusRedemptionToken(session: GuestSession) {
+  return fetchJson<{ short_code: string; expires_at: string; created_at: string }>(session, '/guest/bonus/redemption-token');
+}
+
+export async function refreshGuestBonusRedemptionToken(session: GuestSession) {
+  return fetchJson<{ short_code: string; expires_at: string; created_at: string }>(session, '/guest/bonus/redemption-token/refresh', {
+    method: 'POST',
+  });
+}
+
+export async function verifyBonusCode(session: ApiSession, code: string) {
+  return fetchJson<{
+    valid: boolean;
+    guest: {
+      id: string;
+      name: string;
+      phone: string;
+      bonus_balance: number;
+      loyalty_level: string;
+    };
+    token: {
+      short_code: string;
+      expires_at: string;
+      created_at: string;
+    };
+  }>(session, '/admin/bonus/verify-code', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function redeemBonusByCode(
+  session: ApiSession,
+  input: {
+    code: string;
+    amount: number;
+    order_amount: number;
+    reason?: string;
+  },
+) {
+  return fetchJson<{
+    success: boolean;
+    transaction: any;
+    guest: any;
+    redeemed_amount: number;
+    order_amount: number;
+    new_balance: number;
+  }>(session, '/admin/bonus/redeem-by-code', {
     method: 'POST',
     body: JSON.stringify(input),
   });

@@ -348,6 +348,168 @@ function registerAdminRoutes(app, deps) {
       });
     }),
   );
+
+  app.post(
+    '/admin/bonus/verify-code',
+    authMiddleware,
+    asyncHandler(async (req, res) => {
+      if (!canManageGuestClients(req.user.role)) {
+        throw httpError('Проверка кода доступна только управляющему и администратору.', 403);
+      }
+
+      const shortCode = String(req.body?.code ?? req.body?.short_code ?? '').trim();
+      if (!shortCode) throw httpError('Введите код для проверки.', 400);
+
+      const client = await pool.connect();
+      try {
+        // Ищем активный токен
+        const tokenResult = await client.query(
+          `SELECT t.id, t.guest_id, t.short_code, t.created_at, t.expires_at, t.status, t.used_at,
+                  g.id as guest_id, g.name, g.phone, g.bonus_balance, g.loyalty_level, g.status as guest_status
+           FROM guest_bonus_redemption_tokens t
+           JOIN guest_users g ON g.id = t.guest_id
+           WHERE t.short_code = $1 AND t.status = 'active' AND t.expires_at > NOW()
+           LIMIT 1`,
+          [shortCode],
+        );
+
+        if (!tokenResult.rows[0]) {
+          throw httpError('Код недействителен или истёк. Попросите гостя обновить код.', 404);
+        }
+
+        const token = tokenResult.rows[0];
+
+        if (token.guest_status === 'blocked') {
+          throw httpError('Профиль гостя заблокирован.', 403);
+        }
+
+        res.json({
+          valid: true,
+          guest: {
+            id: token.guest_id,
+            name: token.name,
+            phone: token.phone,
+            bonus_balance: token.bonus_balance,
+            loyalty_level: token.loyalty_level,
+          },
+          token: {
+            short_code: token.short_code,
+            expires_at: token.expires_at,
+            created_at: token.created_at,
+          },
+        });
+      } finally {
+        client.release();
+      }
+    }),
+  );
+
+  app.post(
+    '/admin/bonus/redeem-by-code',
+    authMiddleware,
+    asyncHandler(async (req, res) => {
+      if (!canManageGuestClients(req.user.role)) {
+        throw httpError('Списание бонусов доступно только управляющему и администратору.', 403);
+      }
+
+      const shortCode = String(req.body?.code ?? req.body?.short_code ?? '').trim();
+      if (!shortCode) throw httpError('Введите код для списания.', 400);
+
+      const amount = Math.round(Number(req.body?.amount ?? 0));
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw httpError('Введите сумму бонусов для списания.', 400);
+      }
+
+      const orderAmount = Math.round(Number(req.body?.order_amount ?? req.body?.orderAmount ?? 0));
+      if (!Number.isFinite(orderAmount) || orderAmount <= 0) {
+        throw httpError('Введите сумму заказа.', 400);
+      }
+
+      const maxBonusAmount = maxRedemptionAmount(orderAmount);
+      if (maxBonusAmount <= 0) {
+        throw httpError('Для этого заказа нельзя списать бонусы.', 400);
+      }
+      if (amount > maxBonusAmount) {
+        throw httpError(`Можно списать не больше ${maxBonusAmount} бонусов (20% от суммы заказа ${orderAmount} руб). 1 балл = 1 рубль.`, 400);
+      }
+
+      const reason = String(req.body?.reason ?? 'Списание бонусов по коду').trim();
+
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Проверяем токен
+        const tokenResult = await client.query(
+          `SELECT t.id, t.guest_id, t.short_code, t.expires_at, t.status, t.used_at,
+                  g.id as guest_id, g.name, g.phone, g.bonus_balance, g.status as guest_status
+           FROM guest_bonus_redemption_tokens t
+           JOIN guest_users g ON g.id = t.guest_id
+           WHERE t.short_code = $1 AND t.status = 'active' AND t.expires_at > NOW()
+           LIMIT 1
+           FOR UPDATE`,
+          [shortCode],
+        );
+
+        if (!tokenResult.rows[0]) {
+          throw httpError('Код недействителен или истёк. Попросите гостя обновить код.', 404);
+        }
+
+        const token = tokenResult.rows[0];
+
+        if (token.guest_status === 'blocked') {
+          throw httpError('Профиль гостя заблокирован.', 403);
+        }
+
+        if (token.bonus_balance < amount) {
+          throw httpError(`Недостаточно бонусов. Доступно: ${token.bonus_balance}, запрошено: ${amount}.`, 400);
+        }
+
+        // Помечаем токен как использованный
+        await client.query(
+          `UPDATE guest_bonus_redemption_tokens
+           SET status = 'used', used_at = NOW()
+           WHERE id = $1`,
+          [token.id],
+        );
+
+        // Списываем бонусы
+        const transaction = await addGuestBonusTransaction(client, {
+          guestId: token.guest_id,
+          type: 'staff_code_redeem',
+          amount: -amount,
+          reason,
+          source: 'staff_code_redemption',
+          createdBy: req.user.id,
+        });
+
+        await logActivity(client, req.user.id, 'bonus_redeem_by_code', 'guest_user', token.guest_id, null, {
+          amount,
+          order_amount: orderAmount,
+          short_code: shortCode,
+        });
+
+        const payload = await buildGuestPayload(client, token.guest_id);
+
+        await client.query('COMMIT');
+        emitChange('guest_users', 'updated', payload.guest);
+
+        res.json({
+          success: true,
+          transaction,
+          guest: payload.guest,
+          redeemed_amount: amount,
+          order_amount: orderAmount,
+          new_balance: payload.guest.bonus_balance,
+        });
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }),
+  );
 }
 
 module.exports = { registerAdminRoutes };

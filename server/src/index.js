@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const bcrypt = require('bcryptjs');
+const compression = require('compression');
 const cors = require('cors');
 const express = require('express');
 const helmet = require('helmet');
@@ -10,12 +11,16 @@ const { createHash, randomUUID } = require('crypto');
 const { ipKeyGenerator, rateLimit } = require('express-rate-limit');
 const { Server } = require('socket.io');
 const { initDatabase, pool, query } = require('./db');
+const { cache, invalidateCache, cacheInvalidationMiddleware } = require('./cache');
 const {
   startIikoOrderStatusSyncScheduler,
+  startIikoStaffSyncScheduler,
   syncGuestOrderToIiko,
   syncOpenIikoOrderStatuses,
 } = require('./integrations/iiko');
 const { startGuestMarketingPushScheduler } = require('./guestMarketingPush');
+const { ReservationReminderService } = require('./services/reservation-reminders');
+const { createTwilioClient } = require('./integrations/twilio');
 const {
   can,
   permissionsFor,
@@ -169,7 +174,18 @@ app.disable('x-powered-by');
 app.set('trust proxy', trustProxyValue());
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors(corsOptions));
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+  level: 6, // Баланс между скоростью и степенью сжатия
+  threshold: 1024, // Сжимать только ответы больше 1KB
+}));
 app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: false }));
 
 function asyncHandler(handler) {
   return (req, res, next) => {
@@ -633,6 +649,9 @@ async function sendChatPush(chatId, sender, message) {
 }
 
 function emitChange(entity, action, payload = {}) {
+  // Инвалидируем кэш при изменении данных
+  invalidateCache(entity);
+
   io.emit('sync:changed', {
     entity,
     action,
@@ -2038,6 +2057,7 @@ async function getSnapshot(user, options = {}) {
 const routeDeps = {
   pool,
   query,
+  cache,
   asyncHandler,
   authMiddleware,
   guestAuthMiddleware,
@@ -2103,8 +2123,10 @@ const routeDeps = {
   sendChatPush,
   io,
   getCoordinationApi: () => coordinationApi,
+  iikoStaffScheduler: () => app.locals.iikoStaffScheduler,
   syncGuestOrderToIiko,
   syncOpenIikoOrderStatuses,
+  createTwilioClient,
 };
 
 coordinationApi = registerCoordinationRoutes(app, routeDeps);
@@ -2218,6 +2240,32 @@ async function bootstrap() {
     if (iikoOrderStatusScheduler.enabled) {
       console.log(`iiko order status sync runs every ${Math.round(iikoOrderStatusScheduler.intervalMs / 1000)} seconds.`);
     }
+
+    // Запуск планировщика синхронизации персонала
+    const iikoStaffScheduler = startIikoStaffSyncScheduler({
+      db: pool,
+      env: process.env,
+      randomUUID,
+      logger: console,
+    });
+    if (iikoStaffScheduler.enabled) {
+      console.log(`iiko staff sync runs every ${Math.round(iikoStaffScheduler.intervalMs / 1000)} seconds.`);
+
+      // Опционально: синхронизация при старте
+      const syncOnStartup = String(process.env.IIKO_STAFF_SYNC_ON_STARTUP ?? 'true').toLowerCase() === 'true';
+      if (syncOnStartup) {
+        // Запускаем через 5 секунд после старта сервера
+        setTimeout(() => {
+          iikoStaffScheduler.runNow().catch((error) => {
+            console.error('iiko staff sync on startup failed:', error);
+          });
+        }, 5000);
+      }
+    }
+
+    // Сохраняем ссылку на планировщик для использования в роутах
+    app.locals.iikoStaffScheduler = iikoStaffScheduler;
+
     const guestMarketingPushScheduler = startGuestMarketingPushScheduler({
       pool,
       createGuestNotification,
@@ -2228,6 +2276,13 @@ async function bootstrap() {
     if (guestMarketingPushScheduler.enabled) {
       console.log(`guest marketing push runs every ${Math.round(guestMarketingPushScheduler.intervalMs / 1000)} seconds.`);
     }
+
+    // Запускаем сервис автоматических напоминаний о бронях
+    const reservationReminderService = new ReservationReminderService(pool, randomUUID);
+    const reminderIntervalMs = Number(process.env.RESERVATION_REMINDER_CHECK_INTERVAL_MS ?? 60000);
+    reservationReminderService.start(reminderIntervalMs);
+    console.log(`Reservation reminder service runs every ${Math.round(reminderIntervalMs / 1000)} seconds.`);
+
     void sendUpcomingEventNotifications();
     if (pushReminderIntervalMs > 0) {
       const reminderTimer = setInterval(() => {

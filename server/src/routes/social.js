@@ -26,7 +26,7 @@ function registerSocialRoutes(app, deps) {
     'пизд',
     'еба',
     'badword',
-    'РґСѓСЂР°Рє',
+    'дурак',
   ];
 
   function normalizeStatus(value) {
