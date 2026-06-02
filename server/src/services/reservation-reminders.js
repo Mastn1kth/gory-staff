@@ -98,15 +98,14 @@ class ReservationReminderService {
     const result = await client.query(
       `SELECT r.*
        FROM reservations r
+       LEFT JOIN reservation_reminders rr
+         ON rr.reservation_id = r.id
+        AND rr.reminder_type = 'day_before'
+        AND rr.status != 'cancelled'
        WHERE r.status IN ('new', 'confirmed')
          AND r.date >= CURRENT_DATE
          AND r.date <= CURRENT_DATE + INTERVAL '7 days'
-         AND NOT EXISTS (
-           SELECT 1 FROM reservation_reminders rr
-           WHERE rr.reservation_id = r.id
-             AND rr.reminder_type = 'day_before'
-             AND rr.status != 'cancelled'
-         )`
+         AND rr.id IS NULL`
     );
 
     for (const reservation of result.rows) {

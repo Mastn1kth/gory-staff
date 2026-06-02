@@ -296,7 +296,7 @@ export default function App() {
   }, []);
 
   const mutate = useCallback(
-    async (method: string, path: string, body?: unknown) => {
+    async (method: string, path: string, body?: unknown, options?: { returnErrorBody?: boolean }) => {
       if (!session) return null;
       setSyncing(true);
       try {
@@ -307,9 +307,14 @@ export default function App() {
         return result;
       } catch (error) {
         const text = error instanceof Error ? error.message : 'Действие сохранено и будет отправлено позже.';
+        const status = error && typeof error === 'object' && 'status' in error ? Number((error as { status?: unknown }).status) : null;
+        const responseBody = error && typeof error === 'object' && 'body' in error ? (error as { body?: unknown }).body : null;
         setMessage(text);
-        setOffline(true);
+        setOffline(!status);
         setQueueStatus(await getOfflineQueueStatus(session.user.id));
+        if (options?.returnErrorBody && responseBody && typeof responseBody === 'object') {
+          return responseBody;
+        }
         return null;
       } finally {
         setSyncing(false);

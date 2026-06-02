@@ -2256,7 +2256,7 @@ async function bootstrap() {
       if (syncOnStartup) {
         // Запускаем через 5 секунд после старта сервера
         setTimeout(() => {
-          iikoStaffScheduler.runNow().catch((error) => {
+          iikoStaffScheduler.runNow({ triggerType: 'startup' }).catch((error) => {
             console.error('iiko staff sync on startup failed:', error);
           });
         }, 5000);

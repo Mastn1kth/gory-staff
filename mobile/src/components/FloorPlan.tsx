@@ -379,7 +379,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(215, 169, 74, 0.36)',
   },
   planImage: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     width: '100%',
     height: '100%',
     opacity: 0.88,

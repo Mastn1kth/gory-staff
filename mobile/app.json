@@ -14,24 +14,33 @@
     "android": {
       "package": "ru.gory.staff",
       "permissions": [
+        "CAMERA",
         "POST_NOTIFICATIONS"
       ],
       "versionCode": 47,
-      "usesCleartextTraffic": true,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#18221F"
       }
     },
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#18221F"
-    },
     "plugins": [
       "expo-notifications",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#18221F"
+        }
+      ],
       "expo-video",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Нужен доступ к камере для сканирования QR-кода списания бонусов."
+        }
+      ],
       "expo-web-browser"
     ],
     "extra": {

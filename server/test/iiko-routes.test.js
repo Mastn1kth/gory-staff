@@ -473,3 +473,93 @@ test('iiko open order status endpoint delegates a batch status pull and returns 
   assert.deepEqual(result.orders, { scanned: 2, synced: 2, failed: 0, closed: 1, cancelled: 0 });
   assert.deepEqual(calls, [{ envOrganizationId: 'org-1' }]);
 });
+
+test('iiko staff sync endpoint delegates manual sync, emits users change, and returns new credentials', async (t) => {
+  const calls = [];
+  const emitted = [];
+  const permissions = [];
+  const server = await startIikoRouteServer(
+    {
+      IIKO_ENABLED: 'true',
+      IIKO_API_LOGIN: 'test-api-login',
+      IIKO_ORGANIZATION_ID: 'org-1',
+      IIKO_TERMINAL_GROUP_ID: 'terminal-1',
+    },
+    async () => {},
+    {
+      requirePermission(permission) {
+        permissions.push(permission);
+        return (_req, _res, next) => next();
+      },
+      emitChange: (...args) => emitted.push(args),
+      syncIikoStaff: async (options) => {
+        calls.push({
+          envOrganizationId: options.env.IIKO_ORGANIZATION_ID,
+          triggerType: options.triggerType,
+          generatedId: options.randomUUID(),
+          hasDb: Boolean(options.db),
+        });
+        return {
+          status: 'completed',
+          staff: { created: 1, updated: 2, archived: 0 },
+          new_credentials: [
+            {
+              id: 'staff-1',
+              name: 'Иван iiko',
+              login: 'ivaniiko0000',
+              password: 'TempPass123!',
+              role: 'waiter',
+            },
+          ],
+        };
+      },
+    },
+  );
+  t.after(server.stop);
+
+  const result = await server.request('/iiko/sync/staff', { method: 'POST' });
+
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.staff, { created: 1, updated: 2, archived: 0 });
+  assert.equal(result.new_credentials[0].login, 'ivaniiko0000');
+  assert.deepEqual(calls, [
+    {
+      envOrganizationId: 'org-1',
+      triggerType: 'manual',
+      generatedId: 'test-generated-id',
+      hasDb: true,
+    },
+  ]);
+  assert.ok(permissions.includes('manage:staff'));
+  assert.deepEqual(emitted, [['users', 'updated', { iiko_staff_sync: { created: 1, updated: 2, archived: 0 } }]]);
+});
+
+test('iiko staff sync endpoint returns failed diagnostics as 502 json body', async (t) => {
+  const emitted = [];
+  const server = await startIikoRouteServer(
+    {
+      IIKO_ENABLED: 'true',
+      IIKO_API_LOGIN: 'test-api-login',
+      IIKO_ORGANIZATION_ID: 'org-1',
+      IIKO_TERMINAL_GROUP_ID: 'terminal-1',
+    },
+    async () => {},
+    {
+      emitChange: (...args) => emitted.push(args),
+      syncIikoStaff: async () => ({
+        status: 'failed',
+        staff: { created: 0, updated: 0, archived: 0 },
+        new_credentials: [],
+        error: 'iiko employees request failed',
+      }),
+    },
+  );
+  t.after(server.stop);
+
+  const failed = await expectApiError(() => server.request('/iiko/sync/staff', { method: 'POST' }));
+
+  assert.equal(failed.status, 502);
+  assert.equal(failed.body.status, 'failed');
+  assert.equal(failed.body.error, 'iiko employees request failed');
+  assert.deepEqual(emitted, []);
+});

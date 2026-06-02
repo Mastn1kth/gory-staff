@@ -46,7 +46,11 @@ export type ApiSession = {
   sections: SectionKey[];
 };
 
-export type MutationFn = (method: string, path: string, body?: unknown) => Promise<unknown | null>;
+export type MutationOptions = {
+  returnErrorBody?: boolean;
+};
+
+export type MutationFn = (method: string, path: string, body?: unknown, options?: MutationOptions) => Promise<unknown | null>;
 
 export type HallSignalType = 'hall_help' | 'dessert_ready' | 'bill_soon';
 

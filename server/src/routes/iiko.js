@@ -8,7 +8,7 @@ const {
   syncIikoOrderStatus: defaultSyncIikoOrderStatus,
   syncOpenIikoOrderStatuses: defaultSyncOpenIikoOrderStatuses,
   syncIikoMenu,
-  syncIikoStaff,
+  syncIikoStaff: defaultSyncIikoStaff,
 } = require('../integrations/iiko');
 
 function safeEqualText(left, right) {
@@ -54,6 +54,7 @@ function registerIikoRoutes(app, deps) {
   const syncGuestOrderToIiko = deps.syncGuestOrderToIiko || defaultSyncGuestOrderToIiko;
   const syncIikoOrderStatus = deps.syncIikoOrderStatus || defaultSyncIikoOrderStatus;
   const syncOpenIikoOrderStatuses = deps.syncOpenIikoOrderStatuses || defaultSyncOpenIikoOrderStatuses;
+  const syncIikoStaff = deps.syncIikoStaff || defaultSyncIikoStaff;
   const getIikoStaffScheduler = deps.iikoStaffScheduler || (() => null);
 
   app.get(
@@ -83,6 +84,7 @@ function registerIikoRoutes(app, deps) {
         env: process.env,
         randomUUID,
         logger: console,
+        triggerType: 'manual',
       });
 
       if (result.status === 'completed') {

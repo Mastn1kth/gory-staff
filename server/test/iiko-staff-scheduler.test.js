@@ -142,6 +142,32 @@ test('staff sync scheduler runNow can be called manually', async () => {
   scheduler.stop();
 });
 
+test('staff sync scheduler can tag startup runs separately from scheduled runs', async () => {
+  const syncCalls = [];
+
+  const scheduler = startIikoStaffSyncScheduler({
+    db: { query: async () => ({ rows: [] }) },
+    env: enabledEnv({ IIKO_STAFF_SYNC_INTERVAL_SECONDS: '3600' }),
+    randomUUID: () => 'test-uuid',
+    logger: console,
+    syncIikoStaff: async (options) => {
+      syncCalls.push(options.triggerType);
+      return { status: 'completed', staff: { created: 0, updated: 0, archived: 0 } };
+    },
+    setIntervalFn() {
+      return { unref() {} };
+    },
+    clearIntervalFn() {},
+  });
+
+  const result = await scheduler.runNow({ triggerType: 'startup' });
+
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(syncCalls, ['startup']);
+
+  scheduler.stop();
+});
+
 test('staff sync creates unique logins for iiko employees with the same generated login', async () => {
   const db = newDb({ autoCreateForeignKeyIndices: true });
   const adapter = db.adapters.createPg();

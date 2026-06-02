@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import type { BarcodeScanningResult } from 'expo-camera';
 import { Text, View } from 'react-native';
 
 import { SegmentBroadcastPanel } from '../../components/SegmentBroadcastPanel';
@@ -88,6 +90,21 @@ function numberFromInput(value: string) {
 
 function maxIikoBonusAmount(orderAmount: string) {
   return Math.floor(numberFromInput(orderAmount) * 0.2);
+}
+
+function normalizeRedemptionQrCode(value: string) {
+  const text = String(value ?? '').trim();
+  if (/^\d{6}$/.test(text)) return text;
+
+  try {
+    const url = new URL(text);
+    const code = url.searchParams.get('code') || url.searchParams.get('short_code') || url.searchParams.get('redemption_code');
+    if (code && /^\d{6}$/.test(code.trim())) return code.trim();
+  } catch {
+    // QR is often the short code itself, not a URL.
+  }
+
+  return text.match(/\b\d{6}\b/)?.[0] ?? '';
 }
 
 function activeGuestSession(sessions: TableGuestSession[], guestId: string) {
@@ -187,6 +204,8 @@ export function ClientsScreen({
   const [bonusCode, setBonusCode] = useState('');
   const [codeVerification, setCodeVerification] = useState<any>(null);
   const [codeVerifying, setCodeVerifying] = useState(false);
+  const [redemptionScannerVisible, setRedemptionScannerVisible] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const canViewClients = ['technician', 'owner', 'manager'].includes(currentUser.role);
   const clients = snapshot.guest_clients ?? [];
@@ -245,11 +264,12 @@ export function ClientsScreen({
           ? 'Списать бонусы по коду'
           : 'Списать бонусы';
 
-  async function verifyCode() {
-    if (!bonusCode.trim()) return;
+  async function verifyCode(codeOverride?: string) {
+    const code = String(codeOverride ?? bonusCode).trim();
+    if (!code) return;
     setCodeVerifying(true);
     try {
-      const result = await onMutate('POST', '/admin/bonus/verify-code', { code: bonusCode.trim() }) as any;
+      const result = await onMutate('POST', '/admin/bonus/verify-code', { code }) as any;
       setCodeVerification(result);
       setAmount(String(result?.guest?.bonus_balance ?? 0));
       setIikoOrderAmount('');
@@ -258,6 +278,29 @@ export function ClientsScreen({
     } finally {
       setCodeVerifying(false);
     }
+  }
+
+  async function openRedemptionScanner() {
+    setCodeVerification(null);
+    const permission = cameraPermission?.granted ? cameraPermission : await requestCameraPermission();
+    if (!permission?.granted) {
+      setCodeVerification({ error: 'Нет доступа к камере. Разрешите камеру или введите 6 цифр вручную.' });
+      return;
+    }
+    setRedemptionScannerVisible(true);
+  }
+
+  function handleRedemptionQrScanned(result: BarcodeScanningResult) {
+    if (!redemptionScannerVisible) return;
+    const code = normalizeRedemptionQrCode(result.data);
+    if (!code) {
+      setCodeVerification({ error: 'QR-код не похож на код списания. Попросите гостя обновить код.' });
+      return;
+    }
+    setRedemptionScannerVisible(false);
+    setBonusCode(code);
+    setCodeVerification(null);
+    void verifyCode(code);
   }
 
   async function redeemByCode() {
@@ -475,6 +518,25 @@ export function ClientsScreen({
               placeholder="123456"
             />
             <SecondaryButton
+              title={redemptionScannerVisible ? 'Сканер открыт' : 'Сканировать QR'}
+              onPress={redemptionScannerVisible ? undefined : openRedemptionScanner}
+            />
+            {redemptionScannerVisible ? (
+              <Card tone="soft">
+                <Text style={styles.cardTitle}>Сканирование QR</Text>
+                <Text style={styles.mutedText}>Наведите камеру на QR-код гостя. После считывания код проверится автоматически.</Text>
+                <View style={styles.qrScannerWrap}>
+                  <CameraView
+                    style={styles.qrScanner}
+                    facing="back"
+                    barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                    onBarcodeScanned={handleRedemptionQrScanned}
+                  />
+                </View>
+                <SecondaryButton title="Закрыть сканер" onPress={() => setRedemptionScannerVisible(false)} />
+              </Card>
+            ) : null}
+            <SecondaryButton
               title={codeVerifying ? "Проверка..." : "Проверить код"}
               onPress={codeVerifying || bonusCode.length !== 6 ? undefined : verifyCode}
             />
@@ -659,6 +721,8 @@ const styles = {
   rowBetween: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, gap: 12, alignItems: 'flex-start' as const },
   rowActions: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 8, marginTop: 10 },
   flex: { flex: 1 },
+  qrScannerWrap: { height: 220, borderRadius: 8, overflow: 'hidden' as const, marginTop: 10, marginBottom: 10 },
+  qrScanner: { flex: 1 },
   cardTitle: { color: palette.ink, fontWeight: '800' as const, fontSize: 16 },
   bodyText: { color: palette.ink, marginTop: 4 },
   mutedText: { color: palette.inkMuted, marginTop: 2 },

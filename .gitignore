@@ -15,6 +15,7 @@ server/.env
 .codex-*.txt
 .codex-*.out
 .codex-*.err
+.codex-agent/
 .adb-*
 .screencap.*
 .codex-export-test/

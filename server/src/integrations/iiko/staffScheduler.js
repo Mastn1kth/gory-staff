@@ -67,12 +67,17 @@ function startIikoStaffSyncScheduler(options = {}) {
    * Функция для запуска синхронизации
    * Предотвращает конкурентные запуски
    */
-  async function runNow() {
+  async function runNow(runOptions = {}) {
     // Предотвращение конкурентных запусков
     if (running) {
       options.logger?.warn?.('iiko staff sync skipped because previous run is still active.');
       return { status: 'skipped', reason: 'already_running' };
     }
+
+    const triggerType =
+      typeof runOptions === 'string'
+        ? runOptions
+        : runOptions?.triggerType || 'scheduled';
 
     running = true;
     try {
@@ -81,7 +86,7 @@ function startIikoStaffSyncScheduler(options = {}) {
         env,
         randomUUID: options.randomUUID,
         logger: options.logger,
-        triggerType: 'scheduled',
+        triggerType,
       });
     } catch (error) {
       options.logger?.error?.('iiko staff sync scheduler failed:', error);

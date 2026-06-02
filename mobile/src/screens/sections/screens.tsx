@@ -66,6 +66,24 @@ const orderStatusLabels: Record<string, string> = {
   cancelled: 'Отменено',
 };
 
+type IikoStaffSyncResult = {
+  status: 'completed' | 'failed' | 'disabled' | string;
+  staff?: {
+    created?: number;
+    updated?: number;
+    archived?: number;
+  };
+  new_credentials?: Array<{
+    id: string;
+    name: string;
+    login: string;
+    password: string;
+    role: string;
+  }>;
+  error?: string;
+  disabled_reason?: string;
+};
+
 function minutesUntilReservation(reservation: Reservation) {
   const dateTime = new Date(`${reservation.date?.slice(0, 10)}T${reservation.time ?? '00:00'}:00`);
   if (Number.isNaN(dateTime.getTime())) return null;
@@ -763,10 +781,15 @@ export function ScheduleScreen({ snapshot }: SectionProps) {
   );
 }
 
-export function StaffScreen({ snapshot, onMutate }: SectionProps) {
+export function StaffScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', login: '', phone: '', password: '', role: 'waiter', position: 'Официант' });
   const [passwordReset, setPasswordReset] = useState<{ user: User | null; password: string; error: string | null }>({ user: null, password: '', error: null });
+  const [iikoSync, setIikoSync] = useState<{ running: boolean; result: IikoStaffSyncResult | null; error: string | null }>({
+    running: false,
+    result: null,
+    error: null,
+  });
   const canEdit = canManage(snapshot.permissions, 'manage:staff');
   const users = [...snapshot.users].sort((a, b) => {
     if (a.role === 'pending' && b.role !== 'pending') return -1;
@@ -777,12 +800,75 @@ export function StaffScreen({ snapshot, onMutate }: SectionProps) {
   });
   const visibleUsers = snapshot.current_user.role === 'owner' ? users.filter((user) => user.id !== snapshot.current_user.id) : users;
 
+  const runIikoStaffSync = async () => {
+    setIikoSync({ running: true, result: null, error: null });
+    try {
+      const result = (await onMutate('POST', '/iiko/sync/staff', undefined, { returnErrorBody: true })) as IikoStaffSyncResult | null;
+      if (!result) {
+        setIikoSync({ running: false, result: null, error: 'Синхронизация не запустилась. Проверьте сообщение сверху и подключение к серверу.' });
+        return;
+      }
+      setIikoSync({ running: false, result, error: null });
+      if (result?.status === 'completed') {
+        onRefresh();
+      }
+    } catch (error) {
+      setIikoSync({
+        running: false,
+        result: null,
+        error: error instanceof Error ? error.message : String(error ?? 'Не удалось запустить синхронизацию.'),
+      });
+    }
+  };
+
   return (
     <ScreenScroll>
       {canEdit ? (
-        <View style={styles.actionGrid}>
-          <SecondaryButton title="Добавить" compact onPress={() => setShowForm(true)} />
-        </View>
+        <>
+          <Card>
+            <View style={styles.rowBetween}>
+              <View style={styles.flex}>
+                <Text style={styles.cardTitle}>iiko: синхронизация персонала</Text>
+                <Text style={styles.bodyText}>Создаёт новых сотрудников, обновляет должности и архивирует тех, кто пропал из iiko.</Text>
+              </View>
+              <Pill
+                label={iikoSync.result?.status === 'completed' ? 'Готово' : iikoSync.result?.status === 'failed' ? 'Ошибка' : iikoSync.result?.status === 'disabled' ? 'Отключено' : 'Ручной запуск'}
+                tone={iikoSync.result?.status === 'completed' ? 'good' : iikoSync.result?.status === 'failed' ? 'bad' : iikoSync.result?.status === 'disabled' ? 'warn' : 'neutral'}
+              />
+            </View>
+            <View style={styles.actionGrid}>
+              <PrimaryButton title={iikoSync.running ? 'Синхронизируем...' : 'Синхронизировать из iiko'} compact disabled={iikoSync.running} onPress={runIikoStaffSync} />
+              <SecondaryButton title="Добавить вручную" compact onPress={() => setShowForm(true)} />
+            </View>
+            {iikoSync.error ? <Text style={styles.mutedText} selectable>{iikoSync.error}</Text> : null}
+            {iikoSync.result ? (
+              <>
+                <View style={styles.metricsRow}>
+                  <MetricCard label="Создано" value={iikoSync.result.staff?.created ?? 0} />
+                  <MetricCard label="Обновлено" value={iikoSync.result.staff?.updated ?? 0} />
+                  <MetricCard label="Архив" value={iikoSync.result.staff?.archived ?? 0} />
+                </View>
+                {iikoSync.result.error || iikoSync.result.disabled_reason ? (
+                  <Text style={styles.mutedText} selectable>{iikoSync.result.error ?? iikoSync.result.disabled_reason}</Text>
+                ) : null}
+                {iikoSync.result.new_credentials?.length ? (
+                  <View style={styles.roleAssignBox}>
+                    <Text style={styles.roleAssignTitle}>Новые временные доступы</Text>
+                    <Text style={styles.mutedText}>Показываются только в этом результате запуска. Передайте лично и попросите сменить пароль.</Text>
+                    {iikoSync.result.new_credentials.map((item) => (
+                      <View key={item.id} style={styles.miniRow}>
+                        <View style={styles.flex}>
+                          <Text style={styles.miniTitle}>{item.name} · {item.role}</Text>
+                          <Text style={styles.miniText} selectable>login: {item.login} · password: {item.password}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+          </Card>
+        </>
       ) : null}
       {visibleUsers.map((user) => (
         <Card key={user.id}>
