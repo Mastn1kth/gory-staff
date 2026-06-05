@@ -1,20 +1,22 @@
-# Горы
+# Горы Staff
 
-Локальная система ресторана «Горы»: мобильное приложение для гостей и сотрудников, сервер на компьютере ресторана, PostgreSQL, публичный доступ через Cloudflare relay и интеграции с iiko/Twilio/OAuth.
+Локальная система ресторана «Горы»: мобильное приложение для гостей и сотрудников, сервер на Node.js/Express, PostgreSQL, Cloudflare relay и интеграции с iiko, Twilio и OAuth.
 
-Это не сайт и не PWA. Основной клиент - Expo React Native APK. Основной рабочий запуск для ресторана - `Горы Управление.exe`.
+Это не сайт и не PWA. Основной клиент - Expo React Native APK. Основной запуск для ресторана - `Горы Управление.exe`.
+
+Проверено и обновлено: 2026-06-05. Подписано: Codex.
 
 ## Что сейчас есть
 
 - Android APK для гостей и персонала.
-- Гостевой профиль, бонусная карта, реферальный код, QR для списания бонусов.
+- Гостевой профиль, бонусная карта, реферальный код и QR для списания бонусов.
 - OAuth-вход гостя через mobile deep link `gory-staff://oauth/{provider}`.
-- Рабочая зона персонала: роли, зал, брони, меню, стоп-лист, клиенты, банкеты, задачи, аналитика.
+- Рабочая зона персонала: роли, зал, брони, меню, стоп-лист, клиенты, банкеты, задачи и аналитика.
 - Node.js/Express API, PostgreSQL, Socket.IO.
-- Offline-first кэш и часть очереди рабочих действий.
-- iikoCloud: меню, стоп-лист, модификаторы, заказы, статусы, события оплаты, синхронизация персонала.
+- Offline-first кеш и очередь части рабочих действий.
+- iikoCloud: меню, стоп-лист, модификаторы, заказы, статусы, события оплаты и синхронизация персонала.
 - Twilio SMS-напоминания о бронях с проверкой подписи webhook.
-- Cloudflare Worker/relay для `https://app.gory-staff.ru`.
+- Cloudflare Worker/relay для публичного доступа `https://app.gory-staff.ru`.
 
 ## Быстрый запуск
 
@@ -25,10 +27,10 @@
 3. Нажать `Проверить сервер`.
 4. Установить APK из `builds\Gory-latest.apk`, если нужна проверка на телефоне.
 
-Технические батники лежат в `tools\bat`:
+Технические bat-файлы лежат в `tools\bat`:
 
 - `START_GORY_STAFF.bat` - Docker, PostgreSQL, backend, Cloudflare relay, iiko connector.
-- `STOP_GORY_STAFF.bat` - остановка backend, контейнера, relay и фоновых процессов.
+- `STOP_GORY_STAFF.bat` - остановка backend, контейнеров, relay и фоновых процессов.
 - `BUILD_ANDROID_APK.bat` - сборка Android APK.
 - `BACKUP_GORY_DATABASE.bat` - ручной backup PostgreSQL.
 - `RESTORE_GORY_DATABASE.bat` - восстановление PostgreSQL из backup.
@@ -47,7 +49,7 @@ npm run mobile
 ## Карта проекта
 
 - `mobile` - Expo React Native приложение.
-- `server` - Express API, схема БД, routes, интеграции, тесты.
+- `server` - Express API, схема БД, routes, интеграции и тесты.
 - `tools` - запуск, backup/restore, Excel import/export, iiko connector.
 - `gory-control` - PowerShell/C# панель управления.
 - `cloudflare\https-relay` - Cloudflare Worker.
@@ -74,7 +76,7 @@ npm run mobile
 - `JWT_SECRET`, `GUEST_JWT_SECRET` - разные сильные секреты.
 - `INITIAL_MANAGER_LOGIN`, `INITIAL_MANAGER_PASSWORD` - первый управляющий.
 - `IIKO_ENABLED`, `IIKO_API_LOGIN`, `IIKO_ORGANIZATION_ID`, `IIKO_TERMINAL_GROUP_ID`.
-- `IIKO_WEBHOOK_SECRET` - проверка локальных iiko событий.
+- `IIKO_WEBHOOK_SECRET` - проверка локальных iiko-событий.
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`.
 - `TWILIO_STATUS_CALLBACK_URL` - публичный URL callback; нужен, чтобы подпись Twilio совпадала за прокси.
 - `YANDEX_CLIENT_ID`, `YANDEX_CLIENT_SECRET`, `VK_CLIENT_ID`, `VK_CLIENT_SECRET`.
@@ -109,10 +111,10 @@ node --test mobile/src/**/*.test.js
 - QR списания бонусов в гостевом приложении и staff/admin flow.
 - iiko staff sync на реальной или тестовой организации.
 
-## Правила, которые нельзя ломать
+## Что нельзя ломать
 
 - Не хранить реальные `.env`, токены, пароли, APK, backup и рабочие данные в Git.
 - Не зашивать `localhost` или `127.0.0.1` в APK для реального телефона.
-- Не выдавать оплату/кассу/фискализацию за готовую функцию: сейчас система только принимает факт оплаты из iiko-событий.
-- Не ломать запуск через `Горы Управление.exe` и батники из `tools\bat`.
+- Не выдавать оплату, кассу и фискализацию за готовую функцию: сейчас система только принимает факт оплаты из iiko-событий.
+- Не ломать запуск через `Горы Управление.exe` и bat-файлы из `tools\bat`.
 - Не откатывать чужие незакоммиченные изменения без прямой просьбы.
