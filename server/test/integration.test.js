@@ -2,40 +2,9 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
+const { api, getFreePort, readJson, serverEnv, startTestServer } = require('./test-helpers');
 
 const serverRoot = path.resolve(__dirname, '..');
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function readJson(response) {
-  const text = await response.text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
-}
-
-async function api(baseUrl, route, options = {}) {
-  const response = await fetch(`${baseUrl}${route}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    },
-  });
-  const body = await readJson(response);
-  if (!response.ok) {
-    const error = new Error(body?.error || response.statusText);
-    error.status = response.status;
-    error.body = body;
-    throw error;
-  }
-  return body;
-}
 
 async function expectApiError(request) {
   try {
@@ -44,54 +13,6 @@ async function expectApiError(request) {
     return error;
   }
   throw new Error('Expected API request to fail.');
-}
-
-function serverEnv(port, extraEnv = {}) {
-  return {
-    ...process.env,
-    HOST: '127.0.0.1',
-    PORT: String(port),
-    USE_PGMEM: '1',
-    DATABASE_URL: 'memory',
-    SEED_DEMO_DATA: 'always',
-    DISABLE_PUSH: '1',
-    JWT_SECRET: 'test-jwt-secret-for-gory-staff-integration-2026',
-    GUEST_JWT_SECRET: 'test-guest-secret-for-gory-staff-integration-2026',
-    ...extraEnv,
-  };
-}
-
-async function startTestServer(extraEnv = {}) {
-  const port = 4600 + Math.floor(Math.random() * 500);
-  const stdout = [];
-  const stderr = [];
-  const child = spawn(process.execPath, ['src/index.js'], {
-    cwd: serverRoot,
-    env: serverEnv(port, extraEnv),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  child.stdout.on('data', (chunk) => stdout.push(String(chunk)));
-  child.stderr.on('data', (chunk) => stderr.push(String(chunk)));
-
-  const baseUrl = `http://127.0.0.1:${port}`;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (child.exitCode !== null) break;
-    try {
-      const health = await api(baseUrl, '/health');
-      if (health.ok) {
-        return {
-          baseUrl,
-          stop: () => child.kill('SIGTERM'),
-        };
-      }
-    } catch {
-      await delay(250);
-    }
-  }
-
-  child.kill('SIGTERM');
-  throw new Error(`Server did not start.\nSTDOUT:\n${stdout.join('')}\nSTDERR:\n${stderr.join('')}`);
 }
 
 async function waitForExit(child, timeoutMs = 1500) {
@@ -346,6 +267,57 @@ test('staff login rate limit uses trusted Cloudflare client IP and security head
 
   const otherIp = await failedLoginFrom('203.0.113.20');
   assert.equal(otherIp.status, 401);
+});
+
+test('guest and OAuth rate limits expose request ids and health checks', async (t) => {
+  const server = await startTestServer({
+    GUEST_AUTH_RATE_LIMIT_MAX: '1',
+    GUEST_AUTH_RATE_LIMIT_WINDOW_MS: '60000',
+    OAUTH_RATE_LIMIT_MAX: '1',
+    OAUTH_RATE_LIMIT_WINDOW_MS: '60000',
+  });
+  t.after(server.stop);
+
+  const healthResponse = await fetch(`${server.baseUrl}/health`, {
+    headers: { 'x-request-id': 'test-request-123' },
+  });
+  assert.equal(healthResponse.headers.get('x-request-id'), 'test-request-123');
+  const health = await readJson(healthResponse);
+  assert.equal(health.ok, true);
+  assert.equal(health.checks.database.ok, true);
+  assert.equal(typeof health.checks.schema.ok, 'boolean');
+
+  const firstGuestLogin = await expectApiError(() =>
+    api(server.baseUrl, '/guest/login', {
+      method: 'POST',
+      body: JSON.stringify({ phone: '' }),
+    }),
+  );
+  assert.equal(firstGuestLogin.status, 400);
+  const blockedGuestLogin = await expectApiError(() =>
+    api(server.baseUrl, '/guest/login', {
+      method: 'POST',
+      body: JSON.stringify({ phone: '' }),
+    }),
+  );
+  assert.equal(blockedGuestLogin.status, 429);
+  assert.ok(blockedGuestLogin.body.request_id);
+
+  const firstOauth = await expectApiError(() =>
+    api(server.baseUrl, '/oauth/mobile/yandex', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  );
+  assert.equal(firstOauth.status, 400);
+  const blockedOauth = await expectApiError(() =>
+    api(server.baseUrl, '/oauth/mobile/yandex', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  );
+  assert.equal(blockedOauth.status, 429);
+  assert.ok(blockedOauth.body.request_id);
 });
 
 test('table updates use optimistic concurrency and return current row on conflict', async (t) => {
@@ -963,7 +935,7 @@ test('imported iiko pos order links bonus redemption to payment by order id only
 });
 
 test('server refuses to start without separate guest jwt secret', async () => {
-  const port = 5200 + Math.floor(Math.random() * 500);
+  const port = await getFreePort();
   const env = serverEnv(port, {
     INITIAL_MANAGER_LOGIN: 'owner@example.test',
     INITIAL_MANAGER_PASSWORD: 'OwnerTestPass-2026!',
@@ -1040,6 +1012,10 @@ test('role access matrix protects manager-only and role-specific routes', async 
   await assert.rejects(() => api(server.baseUrl, '/system/status', { headers: { Authorization: `Bearer ${administrator.token}` } }), (error) => error.status === 403);
   await assert.rejects(() => api(server.baseUrl, '/system/status', { headers: { Authorization: `Bearer ${hostess.token}` } }), (error) => error.status === 403);
   await assert.rejects(() => api(server.baseUrl, '/system/status', { headers: { Authorization: `Bearer ${waiter.token}` } }), (error) => error.status === 403);
+  const security = await api(server.baseUrl, '/system/security', { headers: { Authorization: `Bearer ${technician.token}` } });
+  assert.ok(security.security.totals.forbidden_403 >= 1);
+  assert.ok(security.security.recent_events.some((event) => event.type === 'forbidden' && event.path === '/system/status'));
+  await assert.rejects(() => api(server.baseUrl, '/system/security', { headers: { Authorization: `Bearer ${manager.token}` } }), (error) => error.status === 403);
 
   const tableId = hostess.sync.tables[0].id;
   const assignedTable = await api(server.baseUrl, `/tables/${tableId}`, {

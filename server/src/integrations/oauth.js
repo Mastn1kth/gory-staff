@@ -3,6 +3,11 @@
  */
 
 const crypto = require('crypto');
+const { fetchWithTimeout, timeoutFromEnv } = require('../http');
+
+function oauthFetchTimeoutMs() {
+  return timeoutFromEnv('OAUTH_FETCH_TIMEOUT_MS');
+}
 
 /**
  * Получить URL для авторизации через Яндекс
@@ -64,12 +69,13 @@ async function exchangeYandexCode(code, redirectUri) {
     client_secret: clientSecret,
   });
 
-  const response = await fetch('https://oauth.yandex.ru/token', {
+  const response = await fetchWithTimeout('https://oauth.yandex.ru/token', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: params.toString(),
+    timeoutMs: oauthFetchTimeoutMs(),
   });
 
   if (!response.ok) {
@@ -84,10 +90,11 @@ async function exchangeYandexCode(code, redirectUri) {
  * Получить информацию о пользователе Яндекс
  */
 async function getYandexUserInfo(accessToken) {
-  const response = await fetch('https://login.yandex.ru/info?format=json', {
+  const response = await fetchWithTimeout('https://login.yandex.ru/info?format=json', {
     headers: {
       Authorization: `OAuth ${accessToken}`,
     },
+    timeoutMs: oauthFetchTimeoutMs(),
   });
 
   if (!response.ok) {
@@ -126,7 +133,9 @@ async function exchangeVkCode(code, redirectUri) {
     code: code,
   });
 
-  const response = await fetch(`https://oauth.vk.com/access_token?${params.toString()}`);
+  const response = await fetchWithTimeout(`https://oauth.vk.com/access_token?${params.toString()}`, {
+    timeoutMs: oauthFetchTimeoutMs(),
+  });
 
   if (!response.ok) {
     const error = await response.text();
@@ -153,7 +162,9 @@ async function getVkUserInfo(accessToken, userId) {
     v: '5.131',
   });
 
-  const response = await fetch(`https://api.vk.com/method/users.get?${params.toString()}`);
+  const response = await fetchWithTimeout(`https://api.vk.com/method/users.get?${params.toString()}`, {
+    timeoutMs: oauthFetchTimeoutMs(),
+  });
 
   if (!response.ok) {
     const error = await response.text();

@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
-const { spawn } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
 const express = require('express');
 const { newDb } = require('pg-mem');
+const { api, delay, startTestServer: startSharedTestServer } = require('./test-helpers');
 
 const { registerIikoRoutes } = require('../src/routes/iiko');
 
@@ -16,34 +16,9 @@ const iikoEnvKeys = [
   'IIKO_ORGANIZATION_ID',
   'IIKO_TERMINAL_GROUP_ID',
   'IIKO_WEBHOOK_SECRET',
+  'IIKO_JOB_MAX_ATTEMPTS',
+  'IIKO_JOB_RETRY_DELAYS_MS',
 ];
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function readJson(response) {
-  const text = await response.text();
-  return text ? JSON.parse(text) : null;
-}
-
-async function api(baseUrl, route, options = {}) {
-  const response = await fetch(`${baseUrl}${route}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    },
-  });
-  const body = await readJson(response);
-  if (!response.ok) {
-    const error = new Error(body?.error || response.statusText);
-    error.status = response.status;
-    error.body = body;
-    throw error;
-  }
-  return body;
-}
 
 async function expectApiError(request) {
   try {
@@ -91,6 +66,12 @@ function withIikoEnv(env, callback) {
 
 async function startIikoRouteServer(env, setupDb = async () => {}, routeDeps = {}) {
   const pool = await createSchemaPool();
+  await pool.query("INSERT INTO roles (id, name, permissions) VALUES ('role-manager', 'manager', '[]'::jsonb) ON CONFLICT (name) DO NOTHING");
+  await pool.query(
+    `INSERT INTO users (id, name, phone, login, password_hash, role, position, status)
+     VALUES ('test-manager', 'Test Manager', '+10000000000', 'test-manager', 'hash', 'manager', 'Manager', 'off_shift')
+     ON CONFLICT (id) DO NOTHING`,
+  );
   await setupDb(pool);
 
   const app = express();
@@ -130,57 +111,26 @@ async function startIikoRouteServer(env, setupDb = async () => {}, routeDeps = {
   };
 }
 
-function serverEnv(port) {
-  return {
-    ...process.env,
-    HOST: '127.0.0.1',
-    PORT: String(port),
-    USE_PGMEM: '1',
-    DATABASE_URL: 'memory',
-    SEED_DEMO_DATA: 'always',
-    DISABLE_PUSH: '1',
-    JWT_SECRET: 'test-jwt-secret-for-gory-staff-iiko-routes-2026',
-    GUEST_JWT_SECRET: 'test-guest-secret-for-gory-staff-iiko-routes-2026',
-    INITIAL_MANAGER_LOGIN: 'owner@example.test',
-    INITIAL_MANAGER_PASSWORD: 'OwnerTestPass-2026!',
-    DEMO_STAFF_PASSWORD: 'StaffTestPass-2026!',
+async function startTestServer() {
+  return startSharedTestServer({
     IIKO_ENABLED: 'false',
     IIKO_API_LOGIN: '',
     IIKO_ORGANIZATION_ID: '',
     IIKO_TERMINAL_GROUP_ID: '',
-  };
+  });
 }
 
-async function startTestServer() {
-  const port = 5500 + Math.floor(Math.random() * 300);
-  const child = spawn(process.execPath, ['src/index.js'], {
-    cwd: serverRoot,
-    env: serverEnv(port),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const stdout = [];
-  const stderr = [];
-  child.stdout.on('data', (chunk) => stdout.push(String(chunk)));
-  child.stderr.on('data', (chunk) => stderr.push(String(chunk)));
-
-  const baseUrl = `http://127.0.0.1:${port}`;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (child.exitCode !== null) break;
-    try {
-      const health = await api(baseUrl, '/health');
-      if (health.ok) {
-        return {
-          baseUrl,
-          stop: () => child.kill('SIGTERM'),
-        };
-      }
-    } catch {
-      await delay(250);
-    }
+async function waitForIikoJob(server, id, headers = {}) {
+  let job = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const payload = server.request
+      ? await server.request(`/iiko/jobs/${id}`, { headers })
+      : await api(server.baseUrl, `/iiko/jobs/${id}`, { headers });
+    job = payload.job;
+    if (['succeeded', 'failed'].includes(job.status)) return job;
+    await delay(50);
   }
-
-  child.kill('SIGTERM');
-  throw new Error(`Server did not start.\nSTDOUT:\n${stdout.join('')}\nSTDERR:\n${stderr.join('')}`);
+  throw new Error(`iiko job ${id} did not finish. Last status: ${job?.status ?? 'unknown'}`);
 }
 
 test('iiko admin endpoints require menu management permission and do not call iiko when disabled', async (t) => {
@@ -207,7 +157,10 @@ test('iiko admin endpoints require menu management permission and do not call ii
     method: 'POST',
     headers: { Authorization: `Bearer ${manager.token}` },
   });
-  assert.equal(sync.status, 'disabled');
+  assert.equal(sync.job.status, 'queued');
+  const syncJob = await waitForIikoJob({ baseUrl: server.baseUrl }, sync.job.id, { Authorization: `Bearer ${manager.token}` });
+  assert.equal(syncJob.status, 'succeeded');
+  assert.equal(syncJob.result.status, 'disabled');
 
   const forbidden = await expectApiError(() =>
     api(server.baseUrl, '/iiko/status', {
@@ -395,8 +348,12 @@ test('iiko order sync endpoint delegates a local order sync and returns diagnost
   );
   t.after(server.stop);
 
-  const result = await server.request('/iiko/sync/orders/order-1', { method: 'POST' });
+  const queued = await server.request('/iiko/sync/orders/order-1', { method: 'POST' });
+  const job = await waitForIikoJob(server, queued.job.id);
+  const result = job.result;
 
+  assert.equal(queued.job.status, 'queued');
+  assert.equal(job.status, 'succeeded');
   assert.equal(result.status, 'completed');
   assert.equal(result.operation, 'create');
   assert.equal(result.iikoOrderId, 'iiko-order-1');
@@ -432,8 +389,11 @@ test('iiko order status endpoint delegates a local status pull and returns diagn
   );
   t.after(server.stop);
 
-  const result = await server.request('/iiko/sync/orders/order-1/status', { method: 'POST' });
+  const queued = await server.request('/iiko/sync/orders/order-1/status', { method: 'POST' });
+  const job = await waitForIikoJob(server, queued.job.id);
+  const result = job.result;
 
+  assert.equal(job.status, 'succeeded');
   assert.equal(result.status, 'completed');
   assert.equal(result.operation, 'pull_status');
   assert.equal(result.iikoOrderStatus, 'Closed');
@@ -466,8 +426,11 @@ test('iiko open order status endpoint delegates a batch status pull and returns 
   );
   t.after(server.stop);
 
-  const result = await server.request('/iiko/sync/orders/statuses', { method: 'POST' });
+  const queued = await server.request('/iiko/sync/orders/statuses', { method: 'POST' });
+  const job = await waitForIikoJob(server, queued.job.id);
+  const result = job.result;
 
+  assert.equal(job.status, 'succeeded');
   assert.equal(result.status, 'completed');
   assert.equal(result.operation, 'pull_open_statuses');
   assert.deepEqual(result.orders, { scanned: 2, synced: 2, failed: 0, closed: 1, cancelled: 0 });
@@ -484,6 +447,7 @@ test('iiko staff sync endpoint delegates manual sync, emits users change, and re
       IIKO_API_LOGIN: 'test-api-login',
       IIKO_ORGANIZATION_ID: 'org-1',
       IIKO_TERMINAL_GROUP_ID: 'terminal-1',
+      IIKO_JOB_MAX_ATTEMPTS: '1',
     },
     async () => {},
     {
@@ -517,21 +481,28 @@ test('iiko staff sync endpoint delegates manual sync, emits users change, and re
   );
   t.after(server.stop);
 
-  const result = await server.request('/iiko/sync/staff', { method: 'POST' });
+  const queued = await server.request('/iiko/sync/staff', { method: 'POST' });
+  const job = await waitForIikoJob(server, queued.job.id);
+  const result = job.result;
 
+  assert.equal(queued.job.status, 'queued');
+  assert.equal(job.status, 'succeeded');
   assert.equal(result.status, 'completed');
   assert.deepEqual(result.staff, { created: 1, updated: 2, archived: 0 });
   assert.equal(result.new_credentials[0].login, 'ivaniiko0000');
   assert.deepEqual(calls, [
     {
       envOrganizationId: 'org-1',
-      triggerType: 'manual',
+      triggerType: 'manual_job',
       generatedId: 'test-generated-id',
       hasDb: true,
     },
   ]);
   assert.ok(permissions.includes('manage:staff'));
-  assert.deepEqual(emitted, [['users', 'updated', { iiko_staff_sync: { created: 1, updated: 2, archived: 0 } }]]);
+  assert.deepEqual(
+    emitted.filter(([channel]) => channel === 'users'),
+    [['users', 'updated', { iiko_staff_sync: { created: 1, updated: 2, archived: 0 } }]],
+  );
 });
 
 test('iiko staff sync endpoint returns failed diagnostics as 502 json body', async (t) => {
@@ -542,6 +513,7 @@ test('iiko staff sync endpoint returns failed diagnostics as 502 json body', asy
       IIKO_API_LOGIN: 'test-api-login',
       IIKO_ORGANIZATION_ID: 'org-1',
       IIKO_TERMINAL_GROUP_ID: 'terminal-1',
+      IIKO_JOB_MAX_ATTEMPTS: '1',
     },
     async () => {},
     {
@@ -556,10 +528,12 @@ test('iiko staff sync endpoint returns failed diagnostics as 502 json body', asy
   );
   t.after(server.stop);
 
-  const failed = await expectApiError(() => server.request('/iiko/sync/staff', { method: 'POST' }));
+  const queued = await server.request('/iiko/sync/staff', { method: 'POST' });
+  const job = await waitForIikoJob(server, queued.job.id);
 
-  assert.equal(failed.status, 502);
-  assert.equal(failed.body.status, 'failed');
-  assert.equal(failed.body.error, 'iiko employees request failed');
-  assert.deepEqual(emitted, []);
+  assert.equal(queued.job.status, 'queued');
+  assert.equal(job.status, 'failed');
+  assert.equal(job.result.status, 'failed');
+  assert.equal(job.result.error, 'iiko employees request failed');
+  assert.deepEqual(emitted.filter(([channel]) => channel === 'users'), []);
 });

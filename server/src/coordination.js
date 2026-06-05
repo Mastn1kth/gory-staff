@@ -14,6 +14,7 @@ function registerCoordinationRoutes(app, deps) {
     asyncHandler,
     authMiddleware,
     guestAuthMiddleware,
+    guestOrderRateLimiter = (_req, _res, next) => next(),
     requirePermission,
     requireManager,
     can,
@@ -432,6 +433,7 @@ function registerCoordinationRoutes(app, deps) {
   app.post(
     '/guest/reservations',
     guestAuthMiddleware,
+    guestOrderRateLimiter,
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
       try {
@@ -471,6 +473,7 @@ function registerCoordinationRoutes(app, deps) {
   app.post(
     '/guest/check-in',
     guestAuthMiddleware,
+    guestOrderRateLimiter,
     asyncHandler(async (req, res) => {
       const token = String(req.body?.token ?? req.body?.table_token ?? '').trim().toUpperCase();
       if (!token) {
@@ -561,6 +564,7 @@ function registerCoordinationRoutes(app, deps) {
   app.post(
     '/guest/orders/items',
     guestAuthMiddleware,
+    guestOrderRateLimiter,
     asyncHandler(async (req, res) => {
       const menuItemId = String(req.body?.menu_item_id ?? req.body?.menuItemId ?? '').trim();
       const quantity = Math.max(1, Math.min(99, Number(req.body?.quantity ?? 1)));

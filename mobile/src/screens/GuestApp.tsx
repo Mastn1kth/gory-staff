@@ -16,6 +16,7 @@ import {
   Linking,
   Platform,
   Pressable,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   Share,
@@ -35,8 +36,10 @@ import {
   guestOAuthLogin,
   commentGuestNewsPost,
   likeGuestNewsPost,
+  unlikeGuestNewsPost,
   loadGuestMenu,
   loadGuestNews,
+  loadGuestNewsComments,
   loadGuestProfile,
   logoutGuest,
   updateGuestProfile,
@@ -54,6 +57,8 @@ const ROUTE_APP_URL = 'yandexmaps://maps.yandex.ru/?text=%D0%98%D0%B2%D0%B0%D0%B
 const RESTAURANT_LAT = '57.0004';
 const RESTAURANT_LON = '40.9733';
 const MAP_IMAGE_URL = `https://staticmap.openstreetmap.de/staticmap.php?center=${RESTAURANT_LAT},${RESTAURANT_LON}&zoom=16&size=650x520&maptype=mapnik&markers=${RESTAURANT_LAT},${RESTAURANT_LON},red-pushpin`;
+const GUEST_NEWS_PAGE_SIZE = 10;
+const GUEST_NEWS_COMMENTS_PAGE_SIZE = 20;
 const loyaltyTiers = [{
     key: 'bronze',
     title: 'Бронза',
@@ -169,6 +174,9 @@ export function GuestApp({
       });
     const [guestNews, setGuestNews] = useState({ items: [] });
     const [guestNewsLoading, setGuestNewsLoading] = useState(true);
+    const [guestNewsLoadingMore, setGuestNewsLoadingMore] = useState(false);
+    const [guestNewsHasMore, setGuestNewsHasMore] = useState(false);
+    const [guestNewsRefreshing, setGuestNewsRefreshing] = useState(false);
     const [guestMenuLoading, setGuestMenuLoading] = useState(true);
     const [guestOffline, setGuestOffline] = useState(false);
     const [guestSyncing, setGuestSyncing] = useState(false);
@@ -177,7 +185,13 @@ export function GuestApp({
     const [staffVisible, setStaffVisible] = useState(false);
     const [menuQuery, setMenuQuery] = useState('');
     const [selectedDish, setSelectedDish] = useState(null);
+    const [selectedNewsPostId, setSelectedNewsPostId] = useState(null);
     const [newsCommentDrafts, setNewsCommentDrafts] = useState({});
+    const [newsCommentsByPost, setNewsCommentsByPost] = useState({});
+    const [newsCommentsHasMoreByPost, setNewsCommentsHasMoreByPost] = useState({});
+    const [newsCommentsNextOffsetByPost, setNewsCommentsNextOffsetByPost] = useState({});
+    const [newsCommentsLoading, setNewsCommentsLoading] = useState(false);
+    const [newsCommentsLoadingMore, setNewsCommentsLoadingMore] = useState(false);
     const reconnectAttemptRef = useRef(0);
     const [category, setCategory] = useState('Все');
     const [referralModalVisible, setReferralModalVisible] = useState(false);
@@ -214,9 +228,10 @@ export function GuestApp({
             if (alive) setGuestMenuLoading(false);
           }
           try {
-            var newsResult = await loadGuestNews(stored);
+            var newsResult = await loadGuestNews(stored, { limit: GUEST_NEWS_PAGE_SIZE, offset: 0 });
             if (!alive) return;
             setGuestNews(newsResult.news);
+            setGuestNewsHasMore(Boolean(newsResult.news.pagination?.has_more));
             setGuestOffline(current => current || newsResult.offline);
           } catch (_error) {
             if (alive) setGuestOffline(true);
@@ -253,8 +268,9 @@ export function GuestApp({
           }
           var menuResult = await loadGuestMenu(connection.apiUrl);
           setGuestMenu(menuResult.menu);
-          var newsResult = await loadGuestNews(guestSession ? { ...guestSession, apiUrl: connection.apiUrl } : connection.apiUrl);
+          var newsResult = await loadGuestNews(guestSession ? { ...guestSession, apiUrl: connection.apiUrl } : connection.apiUrl, { limit: GUEST_NEWS_PAGE_SIZE, offset: 0 });
           setGuestNews(newsResult.news);
+          setGuestNewsHasMore(Boolean(newsResult.news.pagination?.has_more));
           setGuestOffline(false);
           if (showRestoredMessage) setGuestMessage('Подключение восстановлено. Данные обновлены.');
           return true;
@@ -331,6 +347,9 @@ export function GuestApp({
       });
     }, [category, menuItems, menuQuery]);
     var popular = useMemo(() => menuItems.filter(item => Number(item.popularity ?? 0) >= 80 || item.is_available).slice(0, 5), [menuItems]);
+    var selectedNewsPost = useMemo(() => (guestNews.items ?? []).find(item => item.id === selectedNewsPostId) ?? null, [guestNews.items, selectedNewsPostId]);
+    var selectedNewsComments = selectedNewsPost ? newsCommentsByPost[selectedNewsPost.id] ?? selectedNewsPost.comments ?? [] : [];
+    var selectedNewsCommentsHasMore = selectedNewsPost ? Boolean(newsCommentsHasMoreByPost[selectedNewsPost.id]) : false;
     async function refreshGuestProfile(session = guestSession) {
         if (!session) return;
         try {
@@ -390,26 +409,98 @@ export function GuestApp({
       }
     }
     async function refreshGuestNews(session = guestSession) {
+      var showSkeleton = !(guestNews.items ?? []).length;
       try {
-        var result = await loadGuestNews(session || getFixedApiUrl());
+        setGuestNewsRefreshing(true);
+        if (showSkeleton) {
+          setGuestNewsLoading(true);
+        }
+        var result = await loadGuestNews(session || getFixedApiUrl(), { limit: GUEST_NEWS_PAGE_SIZE, offset: 0 });
         setGuestNews(result.news);
+        setGuestNewsHasMore(Boolean(result.news.pagination?.has_more));
         setGuestOffline(result.offline);
       } catch (error) {
         setGuestMessage(error instanceof Error ? error.message : 'Не удалось обновить новости.');
+      } finally {
+        setGuestNewsLoading(false);
+        setGuestNewsRefreshing(false);
       }
     }
-    async function handleNewsLike(post) {
+    async function loadMoreGuestNews() {
+      if (guestNewsLoading || guestNewsLoadingMore || guestNewsRefreshing || !guestNewsHasMore) return;
+      try {
+        setGuestNewsLoadingMore(true);
+        var offset = (guestNews.items ?? []).length;
+        var result = await loadGuestNews(guestSession || getFixedApiUrl(), { limit: GUEST_NEWS_PAGE_SIZE, offset });
+        setGuestNews(current => ({
+          ...result.news,
+          items: [...(current.items ?? []), ...(result.news.items ?? [])]
+        }));
+        setGuestNewsHasMore(Boolean(result.news.pagination?.has_more));
+        setGuestOffline(result.offline);
+      } catch (error) {
+        setGuestMessage(error instanceof Error ? error.message : 'РќРµ СѓРґР°Р»РѕСЃСЊ РґРѕР·Р°РіСЂСѓР·РёС‚СЊ РЅРѕРІРѕСЃС‚Рё.');
+      } finally {
+        setGuestNewsLoadingMore(false);
+      }
+    }
+    async function loadNewsComments(post, options = {}) {
+      if (!post) return;
+      var append = Boolean(options.append);
+      var currentComments = newsCommentsByPost[post.id] ?? [];
+      var offset = append ? newsCommentsNextOffsetByPost[post.id] ?? currentComments.length : 0;
+      if (append && (newsCommentsLoadingMore || !newsCommentsHasMoreByPost[post.id])) return;
+      try {
+        append ? setNewsCommentsLoadingMore(true) : setNewsCommentsLoading(true);
+        var result = await loadGuestNewsComments(guestSession || getFixedApiUrl(), post.id, { limit: GUEST_NEWS_COMMENTS_PAGE_SIZE, offset });
+        setNewsCommentsByPost(current => {
+          var existing = append ? current[post.id] ?? [] : [];
+          var byId = new Map(existing.map(comment => [comment.id, comment]));
+          for (var comment of result.comments.items ?? []) byId.set(comment.id, comment);
+          return { ...current, [post.id]: Array.from(byId.values()) };
+        });
+        setNewsCommentsHasMoreByPost(current => ({ ...current, [post.id]: Boolean(result.comments.pagination?.has_more) }));
+        setNewsCommentsNextOffsetByPost(current => ({ ...current, [post.id]: result.comments.pagination?.next_offset ?? null }));
+      } catch (error) {
+        setGuestMessage(error instanceof Error ? error.message : 'РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёРё.');
+      } finally {
+        append ? setNewsCommentsLoadingMore(false) : setNewsCommentsLoading(false);
+      }
+    }
+    function openNewsComments(post) {
+      setSelectedNewsPostId(post.id);
+      void loadNewsComments(post, { append: false });
+    }
+    function loadMoreNewsComments() {
+      if (!selectedNewsPost) return;
+      void loadNewsComments(selectedNewsPost, { append: true });
+    }
+    async function handleNewsLike(post, options = {}) {
       if (!guestSession?.token) {
         setGuestMode('login');
         setGuestMessage('Войдите в профиль, чтобы ставить лайки.');
         return;
       }
+      var wasLiked = Boolean(post.liked_by_me);
+      if (options.forceLike && wasLiked) return;
+      var previousLikeCount = Number(post.like_count ?? 0);
+      var nextLiked = options.forceLike ? true : !wasLiked;
+      var optimisticLikeCount = Math.max(0, previousLikeCount + (nextLiked ? 1 : -1));
+      setGuestNews(current => ({
+        ...current,
+        items: (current.items ?? []).map(item => item.id === post.id ? { ...item, liked_by_me: nextLiked, like_count: optimisticLikeCount } : item)
+      }));
       try {
-        var likeResult = await likeGuestNewsPost(guestSession, post.id);
+        var likeResult = nextLiked ? await likeGuestNewsPost(guestSession, post.id) : await unlikeGuestNewsPost(guestSession, post.id);
         setGuestNews(current => ({
+          ...current,
           items: (current.items ?? []).map(item => item.id === post.id ? { ...item, liked_by_me: likeResult.liked, like_count: likeResult.like_count } : item)
         }));
       } catch (error) {
+        setGuestNews(current => ({
+          ...current,
+          items: (current.items ?? []).map(item => item.id === post.id ? { ...item, liked_by_me: wasLiked, like_count: previousLikeCount } : item)
+        }));
         setGuestMessage(error instanceof Error ? error.message : 'Не удалось поставить лайк.');
       }
     }
@@ -424,7 +515,10 @@ export function GuestApp({
       try {
         var comment = await commentGuestNewsPost(guestSession, post.id, text);
         setNewsCommentDrafts(current => ({ ...current, [post.id]: '' }));
+        setNewsCommentsByPost(current => ({ ...current, [post.id]: [...(current[post.id] ?? []), comment] }));
+        setNewsCommentsHasMoreByPost(current => ({ ...current, [post.id]: Boolean(current[post.id]) }));
         setGuestNews(current => ({
+          ...current,
           items: (current.items ?? []).map(item => item.id === post.id ? {
             ...item,
             comment_count: Number(item.comment_count ?? 0) + 1,
@@ -574,10 +668,22 @@ export function GuestApp({
             children: /*#__PURE__*/jsx(GuestNewsScreen, {
               items: guestNews.items ?? [],
               loading: guestNewsLoading,
+              loadingMore: guestNewsLoadingMore,
+              hasMore: guestNewsHasMore,
+              refreshing: guestNewsRefreshing,
+              selectedPost: selectedNewsPost,
+              selectedPostComments: selectedNewsComments,
+              commentsLoading: newsCommentsLoading,
+              commentsLoadingMore: newsCommentsLoadingMore,
+              commentsHasMore: selectedNewsCommentsHasMore,
               commentDrafts: newsCommentDrafts,
               onCommentDraft: (postId, text) => setNewsCommentDrafts(current => ({ ...current, [postId]: text })),
               onComment: handleNewsComment,
               onLike: handleNewsLike,
+              onLoadMore: loadMoreGuestNews,
+              onOpenComments: openNewsComments,
+              onLoadMoreComments: loadMoreNewsComments,
+              onCloseComments: () => setSelectedNewsPostId(null),
               guestMessage: guestMessage,
               offline: guestOffline,
               profile: guestProfile,
@@ -586,7 +692,7 @@ export function GuestApp({
               onLogin: () => setGuestMode('login'),
               onLogout: handleGuestLogout,
               onEditProfile: () => setGuestEditVisible(true),
-              onRefresh: () => refreshGuestProfile(),
+              onRefresh: () => refreshGuestNews(),
               onRegister: () => setGuestMode('register'),
               onShowCode: () => setReferralModalVisible(true),
               onShowLevel: () => setLoyaltyModalVisible(true),
@@ -745,19 +851,46 @@ export function GuestApp({
   function GuestNewsScreen(_ref3) {
     var items = _ref3.items ?? [],
       loading = _ref3.loading,
+      loadingMore = _ref3.loadingMore,
+      hasMore = _ref3.hasMore,
+      refreshing = _ref3.refreshing,
       offline = _ref3.offline,
+      selectedPost = _ref3.selectedPost,
+      selectedPostComments = _ref3.selectedPostComments ?? [],
+      commentsLoading = _ref3.commentsLoading,
+      commentsLoadingMore = _ref3.commentsLoadingMore,
+      commentsHasMore = _ref3.commentsHasMore,
       commentDrafts = _ref3.commentDrafts ?? {},
       onCommentDraft = _ref3.onCommentDraft,
       onComment = _ref3.onComment,
       onLike = _ref3.onLike,
+      onLoadMore = _ref3.onLoadMore,
+      onOpenComments = _ref3.onOpenComments,
+      onLoadMoreComments = _ref3.onLoadMoreComments,
+      onCloseComments = _ref3.onCloseComments,
+      guestSession = _ref3.guestSession,
       onLogin = _ref3.onLogin,
       onRefresh = _ref3.onRefresh;
+    var handleFeedScroll = event => {
+      var nativeEvent = event.nativeEvent;
+      var distanceToEnd = nativeEvent.contentSize.height - (nativeEvent.layoutMeasurement.height + nativeEvent.contentOffset.y);
+      if (distanceToEnd < 360) onLoadMore?.();
+    };
     return /*#__PURE__*/jsxs(KeyboardAwareScrollView, {
       contentContainerStyle: styles.feedContent,
       baseBottomPadding: 118,
       showsVerticalScrollIndicator: false,
       keyboardShouldPersistTaps: "handled",
       contentInsetAdjustmentBehavior: "automatic",
+      onScroll: handleFeedScroll,
+      scrollEventThrottle: 16,
+      refreshControl: /*#__PURE__*/jsx(RefreshControl, {
+        refreshing: Boolean(refreshing),
+        onRefresh: onRefresh,
+        tintColor: palette.burgundy,
+        colors: [palette.burgundy],
+        progressBackgroundColor: palette.surface
+      }),
       children: [/*#__PURE__*/jsxs(View, {
         style: styles.headerLine,
         children: [/*#__PURE__*/jsx(Text, {
@@ -770,18 +903,10 @@ export function GuestApp({
       }), /*#__PURE__*/jsx(Text, {
         style: styles.screenTitle,
         children: "Новости"
-      }), loading ? /*#__PURE__*/jsx(Card, {
-        tone: "soft",
-        children: /*#__PURE__*/jsx(Text, {
-          style: styles.mutedDark,
-          children: "Загружаем новости"
-        })
-      }) : items.length ? items.map(post => /*#__PURE__*/jsx(NewsPostCard, {
+      }), loading ? /*#__PURE__*/jsx(NewsSkeletonList, {}) : items.length ? items.map(post => /*#__PURE__*/jsx(NewsPostCard, {
         post: post,
-        draft: commentDrafts[post.id] ?? '',
-        onDraft: text => onCommentDraft(post.id, text),
-        onLike: () => onLike(post),
-        onComment: () => onComment(post)
+        onLike: options => onLike(post, options),
+        onOpenComments: () => onOpenComments(post)
       }, post.id)) : /*#__PURE__*/jsxs(Card, {
         tone: "soft",
         children: [/*#__PURE__*/jsx(Text, {
@@ -794,10 +919,107 @@ export function GuestApp({
           title: "Обновить новости",
           onPress: onRefresh
         })]
-      }), /*#__PURE__*/jsx(SecondaryButton, {
+      }), loadingMore ? /*#__PURE__*/jsx(NewsSkeletonCard, {
+        compact: true
+      }) : null, hasMore && !loading && !loadingMore ? /*#__PURE__*/jsx(SecondaryButton, {
+        title: "Показать ещё",
+        onPress: onLoadMore
+      }) : null, !guestSession?.token ? /*#__PURE__*/jsx(SecondaryButton, {
         title: "Войти, чтобы комментировать",
         onPress: onLogin
+      }) : null, /*#__PURE__*/jsx(NewsCommentsSheet, {
+        post: selectedPost,
+        comments: selectedPostComments,
+        loading: commentsLoading,
+        loadingMore: commentsLoadingMore,
+        hasMore: commentsHasMore,
+        draft: selectedPost ? commentDrafts[selectedPost.id] ?? '' : '',
+        visible: Boolean(selectedPost),
+        onDraft: text => selectedPost ? onCommentDraft(selectedPost.id, text) : null,
+        onComment: () => selectedPost ? onComment(selectedPost) : null,
+        onLoadMore: onLoadMoreComments,
+        onClose: onCloseComments
       })]
+    });
+  }
+  function NewsSkeletonList() {
+    return /*#__PURE__*/jsxs(Fragment, {
+      children: [/*#__PURE__*/jsx(NewsSkeletonCard, {}), /*#__PURE__*/jsx(NewsSkeletonCard, {
+        compact: true
+      })]
+    });
+  }
+  function NewsSkeletonCard(_refSkeleton) {
+    var compact = _refSkeleton?.compact;
+    return /*#__PURE__*/jsxs(Card, {
+      children: [/*#__PURE__*/jsx(View, {
+        style: [styles.newsSkeletonMedia, compact ? styles.newsSkeletonMediaCompact : null]
+      }), /*#__PURE__*/jsx(View, {
+        style: styles.newsSkeletonLine
+      }), /*#__PURE__*/jsx(View, {
+        style: styles.newsSkeletonLineShort
+      }), /*#__PURE__*/jsxs(View, {
+        style: styles.newsSkeletonActions,
+        children: [/*#__PURE__*/jsx(View, {
+          style: styles.newsSkeletonPill
+        }), /*#__PURE__*/jsx(View, {
+          style: styles.newsSkeletonPill
+        })]
+      })]
+    });
+  }
+  function NewsCommentsSheet(_refCommentsSheet) {
+    var post = _refCommentsSheet.post,
+      visible = _refCommentsSheet.visible,
+      comments = _refCommentsSheet.comments ?? [],
+      loading = _refCommentsSheet.loading,
+      loadingMore = _refCommentsSheet.loadingMore,
+      hasMore = _refCommentsSheet.hasMore,
+      draft = _refCommentsSheet.draft,
+      onDraft = _refCommentsSheet.onDraft,
+      onComment = _refCommentsSheet.onComment,
+      onLoadMore = _refCommentsSheet.onLoadMore,
+      onClose = _refCommentsSheet.onClose;
+    return /*#__PURE__*/jsx(ModalSheet, {
+      visible: visible,
+      title: "РљРѕРјРјРµРЅС‚Р°СЂРёРё",
+      onClose: onClose,
+      children: post ? /*#__PURE__*/jsxs(View, {
+        style: styles.commentsSheetBody,
+        children: [/*#__PURE__*/jsx(Text, {
+          style: styles.cardTitleDark,
+          children: post.title
+        }), loading ? /*#__PURE__*/jsx(Text, {
+          style: styles.mutedDark,
+          children: "Р—Р°РіСЂСѓР¶Р°РµРј РєРѕРјРјРµРЅС‚Р°СЂРёРё"
+        }) : comments.length ? comments.map(comment => /*#__PURE__*/jsxs(View, {
+          style: styles.commentLine,
+          children: [/*#__PURE__*/jsx(Text, {
+            style: styles.commentAuthor,
+            children: comment.guest_name ?? "Р“РѕСЃС‚СЊ"
+          }), /*#__PURE__*/jsx(Text, {
+            style: styles.commentText,
+            children: comment.text
+          })]
+        }, comment.id)) : /*#__PURE__*/jsx(Text, {
+          style: styles.mutedDark,
+          children: "РџРѕРєР° РЅРµС‚ РєРѕРјРјРµРЅС‚Р°СЂРёРµРІ."
+        }), hasMore ? /*#__PURE__*/jsx(SecondaryButton, {
+          title: loadingMore ? "Р—Р°РіСЂСѓР¶Р°РµРј..." : "РџРѕРєР°Р·Р°С‚СЊ РµС‰С‘",
+          onPress: onLoadMore
+        }) : null, /*#__PURE__*/jsxs(View, {
+          style: styles.commentComposer,
+          children: [/*#__PURE__*/jsx(Field, {
+            label: "РљРѕРјРјРµРЅС‚Р°СЂРёР№",
+            placeholder: "РќР°РїРёСЃР°С‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№",
+            value: draft,
+            onChangeText: onDraft
+          }), /*#__PURE__*/jsx(SecondaryButton, {
+            title: "РћС‚РїСЂР°РІРёС‚СЊ",
+            onPress: onComment
+          })]
+        })]
+      }) : null
     });
   }
   function NewsVideoPlayer(_refVideo) {
@@ -816,22 +1038,41 @@ export function GuestApp({
   }
   function NewsPostCard(_refNewsPost) {
     var post = _refNewsPost.post,
-      draft = _refNewsPost.draft,
-      onDraft = _refNewsPost.onDraft,
       onLike = _refNewsPost.onLike,
-      onComment = _refNewsPost.onComment;
+      onOpenComments = _refNewsPost.onOpenComments;
     var media = post.media?.[0] ?? null;
     var imageUrl = media?.thumbnail_url || media?.url;
     var isVideo = media?.media_type === 'video' && media?.url;
+    var lastTapRef = useRef(0);
+    var [heartBurstVisible, setHeartBurstVisible] = useState(false);
+    var handleMediaTap = () => {
+      var now = Date.now();
+      if (now - lastTapRef.current < 300) {
+        setHeartBurstVisible(true);
+        onLike({ forceLike: true });
+        setTimeout(() => setHeartBurstVisible(false), 520);
+      }
+      lastTapRef.current = now;
+    };
+    var previewComments = (post.comments ?? []).slice(-2);
     return /*#__PURE__*/jsxs(Card, {
-      children: [imageUrl ? /*#__PURE__*/jsxs(View, {
+      children: [imageUrl ? /*#__PURE__*/jsxs(Pressable, {
+        onPress: handleMediaTap,
         style: styles.feedMediaFrame,
         children: [isVideo ? /*#__PURE__*/jsx(NewsVideoPlayer, {
           url: media.url
         }) : /*#__PURE__*/jsx(Image, {
           source: { uri: imageUrl },
           style: styles.feedMedia
-        })]
+        }), heartBurstVisible ? /*#__PURE__*/jsx(View, {
+          pointerEvents: "none",
+          style: styles.newsHeartBurst,
+          children: /*#__PURE__*/jsx(Ionicons, {
+            name: "heart",
+            size: 76,
+            color: "#fe2c55"
+          })
+        }) : null]
       }) : null, /*#__PURE__*/jsx(Text, {
         style: styles.cardTitleDark,
         children: post.title
@@ -841,17 +1082,18 @@ export function GuestApp({
       }), /*#__PURE__*/jsxs(View, {
         style: styles.newsActions,
         children: [/*#__PURE__*/jsxs(Pressable, {
-          onPress: onLike,
-          style: styles.newsActionButton,
+          onPress: () => onLike(),
+          style: [styles.newsActionButton, styles.newsLikeButton, post.liked_by_me ? styles.newsLikeButtonActive : null],
           children: [/*#__PURE__*/jsx(Ionicons, {
             name: post.liked_by_me ? "heart" : "heart-outline",
             size: 20,
-            color: post.liked_by_me ? palette.burgundy : palette.ink
+            color: post.liked_by_me ? "#fe2c55" : "#8e8e93"
           }), /*#__PURE__*/jsx(Text, {
-            style: styles.newsActionText,
+            style: [styles.newsActionText, styles.newsLikeText, post.liked_by_me ? styles.newsLikeTextActive : null],
             children: String(post.like_count ?? 0)
           })]
-        }), /*#__PURE__*/jsxs(View, {
+        }), /*#__PURE__*/jsxs(Pressable, {
+          onPress: onOpenComments,
           style: styles.newsActionButton,
           children: [/*#__PURE__*/jsx(Ionicons, {
             name: "chatbubble-outline",
@@ -862,7 +1104,7 @@ export function GuestApp({
             children: String(post.comment_count ?? 0)
           })]
         })]
-      }), (post.comments ?? []).slice(-3).map(comment => /*#__PURE__*/jsxs(View, {
+      }), previewComments.map(comment => /*#__PURE__*/jsxs(View, {
         style: styles.commentLine,
         children: [/*#__PURE__*/jsx(Text, {
           style: styles.commentAuthor,
@@ -871,18 +1113,14 @@ export function GuestApp({
           style: styles.commentText,
           children: comment.text
         })]
-      }, comment.id)), /*#__PURE__*/jsxs(View, {
-        style: styles.commentComposer,
-        children: [/*#__PURE__*/jsx(Field, {
-          label: "Комментарий",
-          placeholder: "Написать комментарий",
-          value: draft,
-          onChangeText: onDraft
-        }), /*#__PURE__*/jsx(SecondaryButton, {
-          title: "Отправить",
-          onPress: onComment
-        })]
-      })]
+      }, comment.id)), Number(post.comment_count ?? 0) > previewComments.length ? /*#__PURE__*/jsx(Pressable, {
+        onPress: onOpenComments,
+        style: styles.newsCommentsMore,
+        children: /*#__PURE__*/jsx(Text, {
+          style: styles.newsCommentsMoreText,
+          children: "Открыть комментарии"
+        })
+      }) : null]
     });
   }
   function GuestProfileScreen(_ref3) {
@@ -3054,7 +3292,9 @@ const styles = StyleSheet.create({
       borderRadius: 8,
       overflow: 'hidden',
       marginBottom: 12,
-      backgroundColor: '#231916'
+      backgroundColor: '#231916',
+      alignItems: 'center',
+      justifyContent: 'center'
     },
     feedMedia: {
       width: '100%',
@@ -3070,6 +3310,50 @@ const styles = StyleSheet.create({
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: 'rgba(0,0,0,0.52)'
+    },
+    newsHeartBurst: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 0,
+      bottom: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'rgba(0,0,0,0.08)'
+    },
+    newsSkeletonMedia: {
+      width: '100%',
+      height: 260,
+      borderRadius: 8,
+      backgroundColor: 'rgba(142,142,147,0.18)'
+    },
+    newsSkeletonMediaCompact: {
+      height: 96
+    },
+    newsSkeletonLine: {
+      marginTop: 14,
+      height: 16,
+      width: '82%',
+      borderRadius: 8,
+      backgroundColor: 'rgba(142,142,147,0.2)'
+    },
+    newsSkeletonLineShort: {
+      marginTop: 9,
+      height: 12,
+      width: '56%',
+      borderRadius: 8,
+      backgroundColor: 'rgba(142,142,147,0.16)'
+    },
+    newsSkeletonActions: {
+      marginTop: 14,
+      flexDirection: 'row',
+      gap: 10
+    },
+    newsSkeletonPill: {
+      width: 66,
+      height: 38,
+      borderRadius: 8,
+      backgroundColor: 'rgba(142,142,147,0.16)'
     },
     newsActions: {
       flexDirection: 'row',
@@ -3088,10 +3372,36 @@ const styles = StyleSheet.create({
       gap: 6,
       backgroundColor: 'rgba(74,42,29,0.07)'
     },
+    newsLikeButton: {
+      backgroundColor: 'rgba(142,142,147,0.12)'
+    },
+    newsLikeButtonActive: {
+      backgroundColor: 'rgba(254,44,85,0.12)'
+    },
     newsActionText: {
       color: palette.ink,
       fontSize: 13,
       fontWeight: '900'
+    },
+    newsLikeText: {
+      color: '#8e8e93'
+    },
+    newsLikeTextActive: {
+      color: '#fe2c55'
+    },
+    newsCommentsMore: {
+      marginTop: 10,
+      alignSelf: 'flex-start',
+      paddingVertical: 8,
+      paddingHorizontal: 2
+    },
+    newsCommentsMoreText: {
+      color: palette.burgundy,
+      fontSize: 13,
+      fontWeight: '900'
+    },
+    commentsSheetBody: {
+      gap: 10
     },
     commentLine: {
       marginTop: 10,

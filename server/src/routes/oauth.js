@@ -19,6 +19,7 @@ function registerOAuthRoutes(app, deps) {
     pool,
     asyncHandler,
     httpError,
+    oauthRateLimiter = (_req, _res, next) => next(),
     randomUUID,
     generateUniqueReferralCode,
     generateUniqueCardNumber,
@@ -286,6 +287,7 @@ function registerOAuthRoutes(app, deps) {
    */
   app.get(
     '/oauth/yandex/url',
+    oauthRateLimiter,
     asyncHandler(async (req, res) => {
       const state = generateOAuthState();
       const mobileRedirectUri = normalizeMobileRedirectUri('yandex', req.query.mobile_redirect_uri);
@@ -308,6 +310,7 @@ function registerOAuthRoutes(app, deps) {
    */
   app.get(
     '/oauth/vk/url',
+    oauthRateLimiter,
     asyncHandler(async (req, res) => {
       const state = generateOAuthState();
       const mobileRedirectUri = normalizeMobileRedirectUri('vk', req.query.mobile_redirect_uri);
@@ -330,6 +333,7 @@ function registerOAuthRoutes(app, deps) {
    */
   app.get(
     '/oauth/yandex/callback',
+    oauthRateLimiter,
     asyncHandler(async (req, res) => {
       const { code, state, error, error_description } = req.query;
 
@@ -399,6 +403,7 @@ function registerOAuthRoutes(app, deps) {
    */
   app.get(
     '/oauth/vk/callback',
+    oauthRateLimiter,
     asyncHandler(async (req, res) => {
       const { code, state, error, error_description } = req.query;
 
@@ -473,6 +478,7 @@ function registerOAuthRoutes(app, deps) {
    */
   app.post(
     '/oauth/mobile/yandex',
+    oauthRateLimiter,
     asyncHandler(async (req, res) => {
       const { code } = req.body;
       const referralCode = req.body.referral_code || null;
@@ -508,6 +514,7 @@ function registerOAuthRoutes(app, deps) {
    */
   app.post(
     '/oauth/mobile/vk',
+    oauthRateLimiter,
     asyncHandler(async (req, res) => {
       const { code } = req.body;
       const referralCode = req.body.referral_code || null;

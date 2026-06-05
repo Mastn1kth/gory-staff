@@ -21,6 +21,7 @@ const {
 const { startGuestMarketingPushScheduler } = require('./guestMarketingPush');
 const { ReservationReminderService } = require('./services/reservation-reminders');
 const { createTwilioClient } = require('./integrations/twilio');
+const { fetchWithTimeout } = require('./http');
 const {
   can,
   permissionsFor,
@@ -137,6 +138,177 @@ const MOBILE_SYNC_GUEST_TRANSACTION_LIMIT = Number(process.env.MOBILE_SYNC_GUEST
 const MOBILE_SYNC_MAX_BYTES = Number(process.env.MOBILE_SYNC_MAX_BYTES ?? 23000);
 const LOGIN_RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS ?? 5 * 60 * 1000));
 const LOGIN_RATE_LIMIT_MAX = Math.max(1, Number(process.env.LOGIN_RATE_LIMIT_MAX ?? 20));
+const metrics = {
+  counters: new Map(),
+  recentEvents: new Map(),
+  recentSecurityEvents: [],
+};
+
+function metricKey(name, labels = {}) {
+  const entries = Object.entries(labels)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (!entries.length) return name;
+  return `${name}{${entries.map(([key, value]) => `${key}=${String(value)}`).join(',')}}`;
+}
+
+function recordMetric(name, labels = {}, amount = 1) {
+  const key = metricKey(name, labels);
+  metrics.counters.set(key, (metrics.counters.get(key) ?? 0) + amount);
+}
+
+function recordRecentEvent(name) {
+  const now = Date.now();
+  const events = metrics.recentEvents.get(name) ?? [];
+  events.push(now);
+  const cutoff = now - 10 * 60 * 1000;
+  metrics.recentEvents.set(name, events.filter((timestamp) => timestamp >= cutoff));
+}
+
+function recentEventCount(name, windowMs = 60 * 1000) {
+  const cutoff = Date.now() - windowMs;
+  return (metrics.recentEvents.get(name) ?? []).filter((timestamp) => timestamp >= cutoff).length;
+}
+
+function recordSecurityEvent(type, fields = {}) {
+  metrics.recentSecurityEvents.push({
+    ts: new Date().toISOString(),
+    type,
+    ...safeLogFields(fields),
+  });
+  metrics.recentSecurityEvents = metrics.recentSecurityEvents.slice(-200);
+}
+
+function metricsSnapshot() {
+  return {
+    counters: Object.fromEntries(metrics.counters.entries()),
+    per_minute: {
+      logins: recentEventCount('login'),
+      likes: recentEventCount('social_like'),
+      comments: recentEventCount('social_comment'),
+      rate_limits: recentEventCount('rate_limit'),
+      external_api_timeouts: recentEventCount('external_api_timeout'),
+      social_import_success: recentEventCount('social_import_success'),
+      social_import_failed: recentEventCount('social_import_failed'),
+    },
+    security_events: metrics.recentSecurityEvents.slice(-80),
+  };
+}
+
+function safeLogFields(fields = {}) {
+  const blocked = /authorization|cookie|token|secret|password|access[_-]?token|refresh[_-]?token/i;
+  return Object.fromEntries(
+    Object.entries(fields)
+      .filter(([key]) => !blocked.test(key))
+      .map(([key, value]) => [key, typeof value === 'string' ? value.slice(0, 240) : value]),
+  );
+}
+
+function logEvent(level, event, fields = {}) {
+  const payload = {
+    ts: new Date().toISOString(),
+    level,
+    event,
+    ...safeLogFields(fields),
+  };
+  const line = JSON.stringify(payload);
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else console.log(line);
+}
+
+function requestIdMiddleware(req, res, next) {
+  const incoming = String(req.get('x-request-id') ?? '').trim();
+  req.requestId = /^[A-Za-z0-9._:-]{8,100}$/.test(incoming) ? incoming : randomUUID();
+  res.setHeader('x-request-id', req.requestId);
+  next();
+}
+
+function requestMetricsMiddleware(req, res, next) {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    const durationMs = Date.now() - startedAt;
+    recordMetric('http_requests_total', { method: req.method, status: res.statusCode });
+    if (res.statusCode === 429) {
+      recordRecentEvent('rate_limit');
+      recordMetric('rate_limits_total', { path: req.route?.path ?? req.path });
+      recordSecurityEvent('rate_limit', {
+        request_id: req.requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        ip: realClientIp(req),
+        guest_id: req.guest?.id,
+        user_id: req.user?.id,
+      });
+      logEvent('warn', 'rate_limit', {
+        request_id: req.requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        ip: realClientIp(req),
+      });
+    }
+    if (res.statusCode === 401 || res.statusCode === 403) {
+      recordMetric('auth_denials_total', { status: res.statusCode, path: req.route?.path ?? req.path });
+      recordSecurityEvent(res.statusCode === 401 ? 'unauthorized' : 'forbidden', {
+        request_id: req.requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        ip: realClientIp(req),
+        guest_id: req.guest?.id,
+        user_id: req.user?.id,
+      });
+    }
+    if (res.statusCode >= 500) {
+      logEvent('error', 'request_failed', {
+        request_id: req.requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        duration_ms: durationMs,
+      });
+    }
+  });
+  next();
+}
+
+function recordRouteMetrics(req, res, next) {
+  res.on('finish', () => {
+    if (res.statusCode >= 400) return;
+    if (req.path === '/auth/login' || req.path === '/guest/login' || req.path.startsWith('/oauth/mobile/')) {
+      recordMetric('logins_total', { path: req.path });
+      recordRecentEvent('login');
+    }
+    if (/^\/guest\/news\/[^/]+\/like$/.test(req.path)) {
+      recordMetric('social_likes_total', { method: req.method });
+      recordRecentEvent('social_like');
+    }
+    if (/^\/guest\/news\/[^/]+\/comments$/.test(req.path) && req.method === 'POST') {
+      recordMetric('social_comments_total');
+      recordRecentEvent('social_comment');
+    }
+  });
+  next();
+}
+
+function makeRateLimitHandler(name, message) {
+  return (req, res) => {
+    recordMetric('rate_limit_rejections_total', { limiter: name });
+    recordRecentEvent('rate_limit');
+    logEvent('warn', 'rate_limit_blocked', {
+      request_id: req.requestId,
+      limiter: name,
+      method: req.method,
+      path: req.path,
+      ip: realClientIp(req),
+      guest_id: req.guest?.id,
+    });
+    res.status(429).json({ error: message, request_id: req.requestId });
+  };
+}
+
 const loginRateLimiter = rateLimit({
   windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
   limit: LOGIN_RATE_LIMIT_MAX,
@@ -144,9 +316,95 @@ const loginRateLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => ipKeyGenerator(realClientIp(req)),
   message: { error: 'Слишком много попыток входа. Подождите несколько минут.' },
+  handler: makeRateLimitHandler('staff_login', 'Слишком много попыток входа. Подождите несколько минут.'),
 });
 
 const BAR_TEXT_PATTERNS = ['бар', 'напит', 'вино', 'алког', 'коктей', 'пиво', 'лимонад', 'чай', 'кофе', 'сок', 'виски', 'водка', 'коньяк'];
+const GUEST_SOCIAL_LIKE_RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.GUEST_SOCIAL_LIKE_RATE_LIMIT_WINDOW_MS ?? 60 * 1000));
+const GUEST_SOCIAL_LIKE_RATE_LIMIT_MAX = Math.max(1, Number(process.env.GUEST_SOCIAL_LIKE_RATE_LIMIT_MAX ?? 60));
+const GUEST_SOCIAL_COMMENT_RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.GUEST_SOCIAL_COMMENT_RATE_LIMIT_WINDOW_MS ?? 60 * 1000));
+const GUEST_SOCIAL_COMMENT_RATE_LIMIT_MAX = Math.max(1, Number(process.env.GUEST_SOCIAL_COMMENT_RATE_LIMIT_MAX ?? 8));
+const GUEST_AUTH_RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.GUEST_AUTH_RATE_LIMIT_WINDOW_MS ?? 5 * 60 * 1000));
+const GUEST_AUTH_RATE_LIMIT_MAX = Math.max(1, Number(process.env.GUEST_AUTH_RATE_LIMIT_MAX ?? 40));
+const OAUTH_RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.OAUTH_RATE_LIMIT_WINDOW_MS ?? 5 * 60 * 1000));
+const OAUTH_RATE_LIMIT_MAX = Math.max(1, Number(process.env.OAUTH_RATE_LIMIT_MAX ?? 30));
+const GUEST_BONUS_RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.GUEST_BONUS_RATE_LIMIT_WINDOW_MS ?? 60 * 1000));
+const GUEST_BONUS_RATE_LIMIT_MAX = Math.max(1, Number(process.env.GUEST_BONUS_RATE_LIMIT_MAX ?? 20));
+const GUEST_ORDER_RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.GUEST_ORDER_RATE_LIMIT_WINDOW_MS ?? 60 * 1000));
+const GUEST_ORDER_RATE_LIMIT_MAX = Math.max(1, Number(process.env.GUEST_ORDER_RATE_LIMIT_MAX ?? 30));
+const GUEST_FEEDBACK_RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.GUEST_FEEDBACK_RATE_LIMIT_WINDOW_MS ?? 60 * 1000));
+const GUEST_FEEDBACK_RATE_LIMIT_MAX = Math.max(1, Number(process.env.GUEST_FEEDBACK_RATE_LIMIT_MAX ?? 8));
+
+function guestSocialRateLimitKey(req) {
+  const guestId = req.guest?.id ? String(req.guest.id) : 'unknown';
+  return `guest:${guestId}|ip:${ipKeyGenerator(realClientIp(req))}`;
+}
+
+const guestAuthRateLimiter = rateLimit({
+  windowMs: GUEST_AUTH_RATE_LIMIT_WINDOW_MS,
+  limit: GUEST_AUTH_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(realClientIp(req)),
+  handler: makeRateLimitHandler('guest_auth', 'Слишком много попыток входа или регистрации. Подождите немного.'),
+});
+
+const oauthRateLimiter = rateLimit({
+  windowMs: OAUTH_RATE_LIMIT_WINDOW_MS,
+  limit: OAUTH_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(realClientIp(req)),
+  handler: makeRateLimitHandler('oauth', 'Слишком много OAuth-запросов. Подождите немного.'),
+});
+
+const guestBonusRateLimiter = rateLimit({
+  windowMs: GUEST_BONUS_RATE_LIMIT_WINDOW_MS,
+  limit: GUEST_BONUS_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: guestSocialRateLimitKey,
+  handler: makeRateLimitHandler('guest_bonus', 'Слишком много бонусных операций. Подождите немного.'),
+});
+
+const guestOrderRateLimiter = rateLimit({
+  windowMs: GUEST_ORDER_RATE_LIMIT_WINDOW_MS,
+  limit: GUEST_ORDER_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: guestSocialRateLimitKey,
+  handler: makeRateLimitHandler('guest_order', 'Слишком много гостевых действий. Подождите немного.'),
+});
+
+const guestFeedbackRateLimiter = rateLimit({
+  windowMs: GUEST_FEEDBACK_RATE_LIMIT_WINDOW_MS,
+  limit: GUEST_FEEDBACK_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: guestSocialRateLimitKey,
+  handler: makeRateLimitHandler('guest_feedback', 'Слишком много отправок отзыва. Подождите немного.'),
+});
+
+const socialLikeRateLimiter = rateLimit({
+  windowMs: GUEST_SOCIAL_LIKE_RATE_LIMIT_WINDOW_MS,
+  limit: GUEST_SOCIAL_LIKE_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: guestSocialRateLimitKey,
+  message: { error: 'Слишком много реакций. Подождите немного.' },
+  handler: makeRateLimitHandler('social_like', 'Слишком много реакций. Подождите немного.'),
+});
+
+const socialCommentRateLimiter = rateLimit({
+  windowMs: GUEST_SOCIAL_COMMENT_RATE_LIMIT_WINDOW_MS,
+  limit: GUEST_SOCIAL_COMMENT_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: guestSocialRateLimitKey,
+  message: { error: 'Слишком много комментариев. Подождите немного.' },
+  handler: makeRateLimitHandler('social_comment', 'Слишком много комментариев. Попробуйте позже.'),
+});
+
 const BAR_ITEM_TYPES = new Set(['bar', 'drink', 'alcohol']);
 
 function textMatchesBar(value) {
@@ -172,6 +430,9 @@ function barMenuSqlCondition(itemAlias = 'mi', categoryAlias = 'mc') {
 
 app.disable('x-powered-by');
 app.set('trust proxy', trustProxyValue());
+app.use(requestIdMiddleware);
+app.use(requestMetricsMiddleware);
+app.use(recordRouteMetrics);
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors(corsOptions));
 app.use(compression({
@@ -274,8 +535,6 @@ async function postExpoPushBatch(messages) {
     return;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), pushRequestTimeoutMs);
   const headers = {
     Accept: 'application/json',
     'Content-Type': 'application/json',
@@ -285,11 +544,11 @@ async function postExpoPushBatch(messages) {
   }
 
   try {
-    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+    const response = await fetchWithTimeout('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers,
       body: JSON.stringify(messages),
-      signal: controller.signal,
+      timeoutMs: pushRequestTimeoutMs,
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
@@ -302,8 +561,6 @@ async function postExpoPushBatch(messages) {
     }
   } catch (error) {
     console.warn('Expo push request failed:', error.message);
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -448,16 +705,14 @@ async function sendPushToDevices(client, devices, { notificationId = null, title
   for (let index = 0; index < messages.length; index += 100) {
     const batch = messages.slice(index, index + 100);
     const batchDevices = validDevices.slice(index, index + 100);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), pushRequestTimeoutMs);
     try {
       const headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
       if (process.env.EXPO_PUSH_ACCESS_TOKEN) headers.Authorization = `Bearer ${process.env.EXPO_PUSH_ACCESS_TOKEN}`;
-      const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      const response = await fetchWithTimeout('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
         headers,
         body: JSON.stringify(batch),
-        signal: controller.signal,
+        timeoutMs: pushRequestTimeoutMs,
       });
       const payload = await response.json().catch(() => null);
       const tickets = Array.isArray(payload?.data) ? payload.data : [];
@@ -496,8 +751,6 @@ async function sendPushToDevices(client, devices, { notificationId = null, title
           );
         }
       }
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
@@ -1540,6 +1793,7 @@ function compactMobileSnapshot(snapshot) {
   return trimMobileSnapshotToLimit({
     server_time: snapshot.server_time,
     server_status: snapshot.server_status,
+    security_status: snapshot.security_status,
     connection: snapshot.connection,
     push_status: snapshot.push_status ? { active_devices: snapshot.push_status.active_devices, devices: [] } : undefined,
     shift_brief: snapshot.shift_brief,
@@ -1589,6 +1843,7 @@ function compactMobileSnapshot(snapshot) {
     iiko_external_orders: Array.isArray(snapshot.iiko_external_orders)
       ? snapshot.iiko_external_orders.slice(0, MOBILE_SYNC_GUEST_TRANSACTION_LIMIT)
       : [],
+    iiko_sync_jobs: Array.isArray(snapshot.iiko_sync_jobs) ? snapshot.iiko_sync_jobs.slice(0, 10) : [],
     shift_checklist: snapshot.shift_checklist,
     supply_requests: snapshot.supply_requests,
     guest_orders: Array.isArray(snapshot.guest_orders) ? snapshot.guest_orders.slice(0, 40) : [],
@@ -1599,6 +1854,8 @@ function compactMobileSnapshot(snapshot) {
     social_posts: Array.isArray(snapshot.social_posts) ? snapshot.social_posts.slice(0, 30) : [],
     social_post_media: Array.isArray(snapshot.social_post_media) ? snapshot.social_post_media.slice(0, 80) : [],
     social_post_comments: Array.isArray(snapshot.social_post_comments) ? snapshot.social_post_comments.slice(0, 80) : [],
+    social_import_jobs: Array.isArray(snapshot.social_import_jobs) ? snapshot.social_import_jobs.slice(0, 10) : [],
+    social_comment_blocklist: Array.isArray(snapshot.social_comment_blocklist) ? snapshot.social_comment_blocklist.slice(0, 80) : [],
     hall_signals: snapshot.hall_signals ?? [],
     table_guest_sessions: snapshot.table_guest_sessions ?? [],
     menu_restored_alerts: snapshot.menu_restored_alerts ?? [],
@@ -1938,7 +2195,7 @@ async function getSnapshot(user, options = {}) {
       : { rows: [] };
 
     const canSeeSmm = can(user.role, 'view:smm');
-    const [socialPosts, socialPostMedia, socialPostComments] = canSeeSmm
+    const [socialPosts, socialPostMedia, socialPostComments, socialImportJobs, socialCommentBlocklist] = canSeeSmm
       ? await Promise.all([
           client.query('SELECT * FROM social_posts ORDER BY COALESCE(published_at, created_at) DESC, created_at DESC LIMIT 100'),
           client.query(
@@ -1955,8 +2212,15 @@ async function getSnapshot(user, options = {}) {
              ORDER BY c.created_at DESC
              LIMIT 200`,
           ),
+          client.query('SELECT * FROM social_import_jobs ORDER BY created_at DESC LIMIT 20'),
+          client.query('SELECT * FROM social_comment_blocklist ORDER BY status ASC, created_at DESC LIMIT 200'),
         ])
-      : [{ rows: [] }, { rows: [] }, { rows: [] }];
+      : [{ rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }];
+
+    const canSeeIikoJobs = can(user.role, 'manage:menu') || can(user.role, 'manage:staff') || can(user.role, 'view:tech_admin');
+    const iikoSyncJobs = canSeeIikoJobs
+      ? await client.query('SELECT * FROM iiko_sync_jobs ORDER BY created_at DESC LIMIT 20')
+      : { rows: [] };
 
     const pushDevices = await client.query(
       `SELECT id, platform, app_version, device_name, is_active, last_seen_at, created_at, updated_at, revoked_at
@@ -1980,6 +2244,7 @@ async function getSnapshot(user, options = {}) {
     const snapshot = {
       server_time: new Date().toISOString(),
       server_status: serverStatus(),
+      security_status: can(user.role, 'view:tech_admin') || can(user.role, 'system:full_access') ? metricsSnapshot() : null,
       connection: {
         api_url: publicServerUrl(),
         websocket_url: websocketUrlForApi(),
@@ -2033,6 +2298,7 @@ async function getSnapshot(user, options = {}) {
       guest_client_transactions: guestClientTransactions.rows,
       guest_bonus_redemptions: guestBonusRedemptions.rows,
       iiko_external_orders: iikoExternalOrders.rows,
+      iiko_sync_jobs: iikoSyncJobs.rows,
       shift_checklist: shiftChecklist.rows,
       supply_requests: supplyRequests.rows,
       guest_orders: guestOrders.rows,
@@ -2041,6 +2307,8 @@ async function getSnapshot(user, options = {}) {
       social_posts: socialPosts.rows,
       social_post_media: socialPostMedia.rows,
       social_post_comments: socialPostComments.rows,
+      social_import_jobs: socialImportJobs.rows,
+      social_comment_blocklist: socialCommentBlocklist.rows,
       hall_signals: coordinationApi ? await coordinationApi.loadHallSignals(client) : [],
       table_guest_sessions: coordinationApi ? await coordinationApi.loadTableGuestSessions(client) : [],
       menu_restored_alerts: coordinationApi ? await coordinationApi.loadMenuRestoredAlerts(client, user.id) : [],
@@ -2117,6 +2385,17 @@ const routeDeps = {
   buildShiftCloseSummary,
   currentShiftForUser,
   canUseSupplyRequests,
+  socialLikeRateLimiter,
+  socialCommentRateLimiter,
+  guestAuthRateLimiter,
+  oauthRateLimiter,
+  guestBonusRateLimiter,
+  guestOrderRateLimiter,
+  guestFeedbackRateLimiter,
+  recordMetric,
+  recordRecentEvent,
+  metricsSnapshot,
+  logEvent,
   buildPeakHours,
   normalizeAnalyticsCounters,
   addUserToRoleChats,
@@ -2206,12 +2485,31 @@ io.on('connection', async (socket) => {
   chats.rows.forEach((row) => socket.join(row.chat_id));
 });
 
-app.use((error, _req, res, _next) => {
+app.use((error, req, res, _next) => {
   const status = Number(error.status ?? 500);
-  if (status >= 500) console.error(error);
+  if (error?.code === 'EXTERNAL_FETCH_TIMEOUT') {
+    recordMetric('external_api_timeouts_total');
+    recordRecentEvent('external_api_timeout');
+    logEvent('warn', 'external_api_timeout', {
+      request_id: req.requestId,
+      method: req.method,
+      path: req.path,
+      status,
+      message: error.message,
+    });
+  } else if (status >= 500) {
+    logEvent('error', 'request_error', {
+      request_id: req.requestId,
+      method: req.method,
+      path: req.path,
+      status,
+      message: error.message,
+    });
+  }
   res.status(status).json({
     error: status >= 500 ? 'Ошибка сервера во время выполнения запроса.' : error.message,
     detail: status >= 500 && process.env.NODE_ENV !== 'production' ? error.message : undefined,
+    request_id: req.requestId,
   });
 });
 

@@ -6,6 +6,9 @@ function registerGuestRoutes(app, deps) {
     query,
     asyncHandler,
     guestAuthMiddleware,
+    guestAuthRateLimiter = (_req, _res, next) => next(),
+    guestBonusRateLimiter = (_req, _res, next) => next(),
+    guestFeedbackRateLimiter = (_req, _res, next) => next(),
     randomUUID,
     httpError,
     normalizeGuestPhone,
@@ -133,6 +136,7 @@ function registerGuestRoutes(app, deps) {
 
   app.post(
     '/guest/register',
+    guestAuthRateLimiter,
     asyncHandler(async (req, res) => {
       const name = String(req.body?.name ?? '').trim();
       const phone = normalizeGuestPhone(req.body?.phone);
@@ -255,6 +259,7 @@ function registerGuestRoutes(app, deps) {
 
   app.post(
     '/guest/login',
+    guestAuthRateLimiter,
     asyncHandler(async (req, res) => {
       const phone = normalizeGuestPhone(req.body?.phone);
       if (!phone) throw httpError('Введите корректный номер телефона', 400);
@@ -376,6 +381,7 @@ function registerGuestRoutes(app, deps) {
   app.get(
     '/guest/bonus/redemption-token',
     guestAuthMiddleware,
+    guestBonusRateLimiter,
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
       try {
@@ -446,6 +452,7 @@ function registerGuestRoutes(app, deps) {
   app.post(
     '/guest/bonus/redemption-token/refresh',
     guestAuthMiddleware,
+    guestBonusRateLimiter,
     asyncHandler(async (req, res) => {
       const client = await pool.connect();
       try {
@@ -510,6 +517,7 @@ function registerGuestRoutes(app, deps) {
   app.post(
     '/guest/bonus/redemptions',
     guestAuthMiddleware,
+    guestBonusRateLimiter,
     asyncHandler(async (req, res) => {
       const amount = Math.round(Number(req.body?.amount ?? 0));
       if (!Number.isFinite(amount) || amount <= 0) throw httpError('Введите сумму бонусов для списания.', 400);
@@ -701,6 +709,7 @@ function registerGuestRoutes(app, deps) {
   app.post(
     '/guest/feedback/:id',
     guestAuthMiddleware,
+    guestFeedbackRateLimiter,
     asyncHandler(async (req, res) => {
       const rating = Number(req.body?.rating);
       if (!Number.isInteger(rating) || rating < 1 || rating > 5) {

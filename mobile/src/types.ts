@@ -520,6 +520,43 @@ export type IikoExternalOrder = {
   closed_at?: string | null;
 };
 
+export type IikoSyncJob = {
+  id: string;
+  job_type: 'staff_sync' | 'menu_sync' | 'open_order_statuses' | 'order_sync' | 'order_status' | string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | string;
+  params_json?: Record<string, unknown>;
+  params?: Record<string, unknown>;
+  result_json?: Record<string, unknown>;
+  result?: {
+    status?: string;
+    staff?: {
+      created?: number;
+      updated?: number;
+      archived?: number;
+    };
+    new_credentials?: Array<{
+      id: string;
+      name: string;
+      login: string;
+      password: string;
+      role: string;
+    }>;
+    error?: string;
+    disabled_reason?: string;
+    [key: string]: unknown;
+  };
+  message?: string | null;
+  attempt_count?: number;
+  max_attempts?: number;
+  next_run_at?: string | null;
+  last_error?: string | null;
+  created_by?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+};
+
 export type GuestFeedbackRequest = {
   id: string;
   guest_id: string;
@@ -640,9 +677,40 @@ export type SocialPostComment = {
   post_id: string;
   guest_id: string;
   guest_name?: string;
+  post_title?: string;
   text: string;
   status: string;
   created_at: string;
+  updated_at?: string;
+  version?: number;
+};
+
+export type SocialImportJob = {
+  id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | string;
+  sources?: string[];
+  sources_json?: string[];
+  result_json?: { sources?: Array<{ source: string; status: string; imported_count?: number; missing?: string[]; error?: string }> };
+  message?: string | null;
+  attempt_count?: number;
+  max_attempts?: number;
+  next_run_at?: string | null;
+  last_error?: string | null;
+  created_by?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+};
+
+export type SocialCommentBlocklistItem = {
+  id: string;
+  word: string;
+  normalized_word: string;
+  status: 'active' | 'inactive' | string;
+  created_by?: string | null;
+  created_at: string;
+  updated_at?: string;
 };
 
 export type RuleItem = {
@@ -845,6 +913,7 @@ export type DataSnapshot = {
   guest_client_transactions?: GuestBonusTransaction[];
   guest_bonus_redemptions?: GuestBonusRedemption[];
   iiko_external_orders?: IikoExternalOrder[];
+  iiko_sync_jobs?: IikoSyncJob[];
   shift_checklist: ShiftChecklistItem[];
   supply_requests: SupplyRequest[];
   guest_orders?: GuestOrder[];
@@ -853,6 +922,13 @@ export type DataSnapshot = {
   social_posts?: SocialPost[];
   social_post_media?: SocialPostMedia[];
   social_post_comments?: SocialPostComment[];
+  social_import_jobs?: SocialImportJob[];
+  social_comment_blocklist?: SocialCommentBlocklistItem[];
+  security_status?: {
+    counters?: Record<string, number>;
+    per_minute?: Record<string, number>;
+    security_events?: Array<Record<string, unknown>>;
+  } | null;
   hall_signals?: HallSignal[];
   table_guest_sessions?: TableGuestSession[];
   menu_restored_alerts?: MenuRestoredAlert[];

@@ -94,6 +94,41 @@ test('guest news renders real video media instead of a static play badge only', 
   assert.match(guestAppSource, /useVideoPlayer/);
 });
 
+test('guest news uses paged feed, bottom-sheet comments, skeleton loading and double-tap like', () => {
+  assert.match(guestAppSource, /GUEST_NEWS_PAGE_SIZE/);
+  assert.match(guestAppSource, /loadMoreGuestNews/);
+  assert.match(guestAppSource, /onScroll:\s*handleFeedScroll/);
+  assert.match(guestAppSource, /NewsSkeletonList/);
+  assert.match(guestAppSource, /NewsSkeletonCard/);
+  assert.match(guestAppSource, /NewsCommentsSheet/);
+  assert.match(guestAppSource, /selectedNewsPostId/);
+  assert.match(guestAppSource, /forceLike/);
+  assert.match(guestAppSource, /lastTapRef/);
+  assert.match(guestAppSource, /newsHeartBurst/);
+});
+
+test('guest news supports native pull-to-refresh without replacing a loaded feed with skeletons', () => {
+  const start = guestAppSource.indexOf('function GuestNewsScreen');
+  const end = guestAppSource.indexOf('function NewsSkeletonList', start);
+  const newsScreen = guestAppSource.slice(start, end);
+
+  assert.match(guestAppSource, /RefreshControl/);
+  assert.match(guestAppSource, /guestNewsRefreshing/);
+  assert.match(newsScreen, /refreshControl:\s*\/\*#__PURE__\*\/jsx\(RefreshControl/);
+  assert.match(newsScreen, /refreshing:\s*Boolean\(refreshing\)/);
+  assert.match(newsScreen, /onRefresh:\s*onRefresh/);
+});
+
+test('guest news comments load through a separate paged bottom-sheet request', () => {
+  assert.match(guestAppSource, /GUEST_NEWS_COMMENTS_PAGE_SIZE/);
+  assert.match(guestAppSource, /loadGuestNewsComments/);
+  assert.match(guestAppSource, /newsCommentsByPost/);
+  assert.match(guestAppSource, /newsCommentsNextOffsetByPost/);
+  assert.match(guestAppSource, /loadNewsComments/);
+  assert.match(guestAppSource, /onLoadMoreComments/);
+  assert.match(guestAppSource, /selectedPostComments/);
+});
+
 test('guest bonus and referral QR surfaces use a real QR renderer', () => {
   assert.match(guestAppSource, /react-native-qrcode-svg/);
   assert.match(guestAppSource, /QRCode/);

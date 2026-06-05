@@ -158,6 +158,24 @@ export type GuestNewsPost = {
 
 export type GuestNewsPayload = {
   items: GuestNewsPost[];
+  pagination?: {
+    limit: number;
+    offset: number;
+    total: number;
+    next_offset: number | null;
+    has_more: boolean;
+  };
+};
+
+export type GuestNewsCommentsPayload = {
+  items: GuestNewsComment[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+    next_offset: number | null;
+    has_more: boolean;
+  };
 };
 
 export type ServerConnectionStatus = {
@@ -309,11 +327,13 @@ function normalizeQueueItem(item: Record<string, unknown>, session?: ApiSession 
 class ApiError extends Error {
   status?: number;
   body?: unknown;
+  requestId?: string | null;
 
-  constructor(message: string, status?: number, body?: unknown) {
+  constructor(message: string, status?: number, body?: unknown, requestId?: string | null) {
     super(message);
     this.status = status;
     this.body = body;
+    this.requestId = requestId ?? null;
   }
 }
 
@@ -327,6 +347,27 @@ function nowIso() {
 
 function friendlyError(error: unknown) {
   return error instanceof Error ? error.message : String(error ?? 'Неизвестная ошибка');
+}
+
+function friendlyApiErrorMessage(path: string, status: number, serverMessage: string) {
+  const message = String(serverMessage ?? '').trim();
+  if (status === 429) {
+    if (/^\/guest\/news\/[^/]+\/comments$/.test(path)) return 'Слишком много комментариев, попробуйте позже.';
+    if (/^\/guest\/news\/[^/]+\/like$/.test(path)) return 'Слишком много реакций, попробуйте позже.';
+    if (path.startsWith('/oauth/')) return 'Слишком много попыток входа, попробуйте позже.';
+    return 'Слишком много действий, попробуйте позже.';
+  }
+  if (/^\/guest\/news\/[^/]+\/like$/.test(path)) {
+    return 'Не удалось поставить лайк.';
+  }
+  if (/^\/guest\/news\/[^/]+\/comments$/.test(path)) {
+    if (status === 400 && /(провер|модерац|moder|block|ценз|запрещ)/i.test(message)) {
+      return 'Комментарий не прошёл проверку.';
+    }
+    return message || 'Не удалось отправить комментарий.';
+  }
+  if (status >= 500) return 'Сервер временно не отвечает. Попробуйте позже.';
+  return message || 'Сервер вернул ошибку.';
 }
 
 async function isNetworkClearlyOffline() {
@@ -539,7 +580,10 @@ async function fetchJson<T>(sessionOrUrl: ApiSession | string | GuestSession, pa
     if (!response.ok) {
       const message =
         data && typeof data === 'object' && 'error' in data ? String((data as { error?: unknown }).error) : 'Сервер вернул ошибку.';
-      throw new ApiError(message, response.status, data);
+      const requestId =
+        response.headers.get('x-request-id') ??
+        (data && typeof data === 'object' && 'request_id' in data ? String((data as { request_id?: unknown }).request_id) : null);
+      throw new ApiError(friendlyApiErrorMessage(path, response.status, message), response.status, data, requestId);
     }
     return data as T;
   } catch (error) {
@@ -1010,18 +1054,28 @@ export async function loadGuestMenu(preferredUrl?: string) {
   }
 }
 
-export async function loadGuestNews(sessionOrUrl?: GuestSession | string | null) {
+export async function loadGuestNews(
+  sessionOrUrl?: GuestSession | string | null,
+  options: { limit?: number; offset?: number } = {},
+) {
   const preferredUrl = typeof sessionOrUrl === 'string' ? sessionOrUrl : sessionOrUrl?.apiUrl;
+  const requestedLimit = Number(options.limit ?? 10);
+  const requestedOffset = Number(options.offset ?? 0);
+  const limit = Math.max(1, Math.min(20, Math.floor(Number.isFinite(requestedLimit) ? requestedLimit : 10)));
+  const offset = Math.max(0, Math.floor(Number.isFinite(requestedOffset) ? requestedOffset : 0));
+  const path = `/guest/news?limit=${limit}&offset=${offset}`;
   try {
     const apiUrl = await resolveApiUrl(preferredUrl || getFixedApiUrl());
     const source = typeof sessionOrUrl === 'object' && sessionOrUrl?.token ? { ...sessionOrUrl, apiUrl } : apiUrl;
-    const news = await fetchJson<GuestNewsPayload>(source, '/guest/news');
-    await AsyncStorage.multiSet([
-      [GUEST_NEWS_CACHE_KEY, JSON.stringify(news)],
-      [API_URL_KEY, apiUrl],
-      [GUEST_NEWS_SYNC_KEY, nowIso()],
-      [LAST_CONNECTION_KEY, nowIso()],
-    ]);
+    const news = await fetchJson<GuestNewsPayload>(source, path);
+    if (offset === 0) {
+      await AsyncStorage.multiSet([
+        [GUEST_NEWS_CACHE_KEY, JSON.stringify(news)],
+        [API_URL_KEY, apiUrl],
+        [GUEST_NEWS_SYNC_KEY, nowIso()],
+        [LAST_CONNECTION_KEY, nowIso()],
+      ]);
+    }
     return { news, apiUrl, offline: false };
   } catch (error) {
     const cached = await AsyncStorage.getItem(GUEST_NEWS_CACHE_KEY);
@@ -1051,6 +1105,22 @@ export async function commentGuestNewsPost(session: GuestSession, postId: string
     method: 'POST',
     body: JSON.stringify({ text }),
   });
+}
+
+export async function loadGuestNewsComments(
+  sessionOrUrl: GuestSession | string,
+  postId: string,
+  options: { limit?: number; offset?: number } = {},
+) {
+  const requestedLimit = Number(options.limit ?? 20);
+  const requestedOffset = Number(options.offset ?? 0);
+  const limit = Math.max(1, Math.min(50, Math.floor(Number.isFinite(requestedLimit) ? requestedLimit : 20)));
+  const offset = Math.max(0, Math.floor(Number.isFinite(requestedOffset) ? requestedOffset : 0));
+  const preferredUrl = typeof sessionOrUrl === 'string' ? sessionOrUrl : sessionOrUrl.apiUrl;
+  const apiUrl = await resolveApiUrl(preferredUrl || getFixedApiUrl());
+  const source = typeof sessionOrUrl === 'object' ? { ...sessionOrUrl, apiUrl } : apiUrl;
+  const comments = await fetchJson<GuestNewsCommentsPayload>(source, `/guest/news/${postId}/comments?limit=${limit}&offset=${offset}`);
+  return { comments, apiUrl, offline: false };
 }
 
 export async function signIn(apiUrl: string, login: string, password: string): Promise<ApiSession> {

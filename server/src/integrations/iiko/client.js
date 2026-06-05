@@ -1,3 +1,5 @@
+const { fetchWithTimeout, timeoutFromEnv } = require('../../http');
+
 const DEFAULT_IIKO_API_BASE = 'https://api-ru.iiko.services';
 
 function normalizeApiBase(value) {
@@ -31,6 +33,7 @@ function createIikoHttpClient(config, options = {}) {
   }
 
   const apiBase = normalizeApiBase(config.apiBase);
+  const timeoutMs = options.timeoutMs ?? config.timeoutMs ?? timeoutFromEnv('IIKO_FETCH_TIMEOUT_MS', 15000);
   let token = null;
 
   async function post(path, body, auth = true) {
@@ -46,23 +49,18 @@ function createIikoHttpClient(config, options = {}) {
       headers.Authorization = `Bearer ${token}`;
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
-    try {
-      const response = await fetchImpl(`${apiBase}${path}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body || {}),
-        signal: controller.signal,
-      });
-      const payload = await readJson(response);
-      if (!response.ok) {
-        throw new Error(iikoErrorMessage(path, response, payload));
-      }
-      return payload;
-    } finally {
-      clearTimeout(timer);
+    const response = await fetchWithTimeout(`${apiBase}${path}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body || {}),
+      timeoutMs,
+      fetchImpl,
+    });
+    const payload = await readJson(response);
+    if (!response.ok) {
+      throw new Error(iikoErrorMessage(path, response, payload));
     }
+    return payload;
   }
 
   async function accessToken() {

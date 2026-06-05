@@ -988,6 +988,28 @@ CREATE TABLE IF NOT EXISTS iiko_order_sync_log (
 CREATE INDEX IF NOT EXISTS idx_iiko_order_sync_log_finished ON iiko_order_sync_log(finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_iiko_order_sync_log_order ON iiko_order_sync_log(order_id, finished_at DESC);
 
+CREATE TABLE IF NOT EXISTS iiko_sync_jobs (
+  id TEXT PRIMARY KEY,
+  job_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  params_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  message TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  next_run_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_iiko_sync_jobs_status_time ON iiko_sync_jobs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_iiko_sync_jobs_ready ON iiko_sync_jobs(status, next_run_at, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_iiko_sync_jobs_type_time ON iiko_sync_jobs(job_type, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS iiko_external_orders (
   id TEXT PRIMARY KEY,
   iiko_order_id TEXT NOT NULL UNIQUE,
@@ -1138,6 +1160,42 @@ CREATE TABLE IF NOT EXISTS social_post_comments (
   version INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS social_comment_blocklist (
+  id TEXT PRIMARY KEY,
+  word TEXT NOT NULL,
+  normalized_word TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS social_import_jobs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'queued',
+  sources_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  message TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  next_run_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE social_import_jobs
+  ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE social_import_jobs
+  ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE social_import_jobs
+  ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;
+ALTER TABLE social_import_jobs
+  ADD COLUMN IF NOT EXISTS last_error TEXT;
+
 CREATE TABLE IF NOT EXISTS social_import_runs (
   id TEXT PRIMARY KEY,
   source TEXT NOT NULL,
@@ -1154,6 +1212,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_social_posts_source_external ON social_pos
 CREATE INDEX IF NOT EXISTS idx_social_post_media_post ON social_post_media(post_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_social_post_likes_guest ON social_post_likes(guest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_post_comments_post ON social_post_comments(post_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_post_comments_status ON social_post_comments(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_import_jobs_status_time ON social_import_jobs(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_social_import_jobs_ready ON social_import_jobs(status, next_run_at, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_social_import_runs_source_time ON social_import_runs(source, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS menu_restored_alerts (

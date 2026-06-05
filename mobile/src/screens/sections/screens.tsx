@@ -24,6 +24,7 @@ import type {
   ChatMessage,
   DataSnapshot,
   EventItem,
+  IikoSyncJob,
   MenuItem,
   Reservation,
   RestaurantTable,
@@ -785,12 +786,15 @@ export function StaffScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', login: '', phone: '', password: '', role: 'waiter', position: 'Официант' });
   const [passwordReset, setPasswordReset] = useState<{ user: User | null; password: string; error: string | null }>({ user: null, password: '', error: null });
-  const [iikoSync, setIikoSync] = useState<{ running: boolean; result: IikoStaffSyncResult | null; error: string | null }>({
+  const [iikoSync, setIikoSync] = useState<{ running: boolean; job: IikoSyncJob | null; error: string | null }>({
     running: false,
-    result: null,
+    job: null,
     error: null,
   });
   const canEdit = canManage(snapshot.permissions, 'manage:staff');
+  const iikoJobs = [...(snapshot.iiko_sync_jobs ?? [])].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const latestStaffJob = iikoSync.job ?? iikoJobs.find((job) => job.job_type === 'staff_sync') ?? null;
+  const latestStaffResult = (latestStaffJob?.result ?? latestStaffJob?.result_json ?? null) as IikoStaffSyncResult | null;
   const users = [...snapshot.users].sort((a, b) => {
     if (a.role === 'pending' && b.role !== 'pending') return -1;
     if (a.role !== 'pending' && b.role === 'pending') return 1;
@@ -801,21 +805,19 @@ export function StaffScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
   const visibleUsers = snapshot.current_user.role === 'owner' ? users.filter((user) => user.id !== snapshot.current_user.id) : users;
 
   const runIikoStaffSync = async () => {
-    setIikoSync({ running: true, result: null, error: null });
+    setIikoSync({ running: true, job: null, error: null });
     try {
-      const result = (await onMutate('POST', '/iiko/sync/staff', undefined, { returnErrorBody: true })) as IikoStaffSyncResult | null;
-      if (!result) {
-        setIikoSync({ running: false, result: null, error: 'Синхронизация не запустилась. Проверьте сообщение сверху и подключение к серверу.' });
+      const result = (await onMutate('POST', '/iiko/sync/staff', undefined, { returnErrorBody: true })) as { job?: IikoSyncJob } | null;
+      if (!result?.job) {
+        setIikoSync({ running: false, job: null, error: 'Синхронизация не запустилась. Проверьте сообщение сверху и подключение к серверу.' });
         return;
       }
-      setIikoSync({ running: false, result, error: null });
-      if (result?.status === 'completed') {
-        onRefresh();
-      }
+      setIikoSync({ running: false, job: result.job, error: null });
+      onRefresh();
     } catch (error) {
       setIikoSync({
         running: false,
-        result: null,
+        job: null,
         error: error instanceof Error ? error.message : String(error ?? 'Не удалось запустить синхронизацию.'),
       });
     }
@@ -832,8 +834,8 @@ export function StaffScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
                 <Text style={styles.bodyText}>Создаёт новых сотрудников, обновляет должности и архивирует тех, кто пропал из iiko.</Text>
               </View>
               <Pill
-                label={iikoSync.result?.status === 'completed' ? 'Готово' : iikoSync.result?.status === 'failed' ? 'Ошибка' : iikoSync.result?.status === 'disabled' ? 'Отключено' : 'Ручной запуск'}
-                tone={iikoSync.result?.status === 'completed' ? 'good' : iikoSync.result?.status === 'failed' ? 'bad' : iikoSync.result?.status === 'disabled' ? 'warn' : 'neutral'}
+                label={latestStaffJob?.status === 'succeeded' ? 'Готово' : latestStaffJob?.status === 'failed' ? 'Ошибка' : latestStaffJob?.status === 'running' ? 'В работе' : latestStaffJob?.status === 'queued' ? 'В очереди' : 'Ручной запуск'}
+                tone={latestStaffJob?.status === 'succeeded' ? 'good' : latestStaffJob?.status === 'failed' ? 'bad' : latestStaffJob?.status === 'queued' || latestStaffJob?.status === 'running' ? 'warn' : 'neutral'}
               />
             </View>
             <View style={styles.actionGrid}>
@@ -841,21 +843,28 @@ export function StaffScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
               <SecondaryButton title="Добавить вручную" compact onPress={() => setShowForm(true)} />
             </View>
             {iikoSync.error ? <Text style={styles.mutedText} selectable>{iikoSync.error}</Text> : null}
-            {iikoSync.result ? (
+            {latestStaffJob ? (
+              <Text style={styles.mutedText} selectable>
+                {latestStaffJob.message ?? `Задача ${latestStaffJob.status}`}
+                {latestStaffJob.attempt_count ? ` · попытка ${latestStaffJob.attempt_count}/${latestStaffJob.max_attempts ?? 3}` : ''}
+                {latestStaffJob.next_run_at ? ` · повтор ${shortDateTime(latestStaffJob.next_run_at)}` : ''}
+              </Text>
+            ) : null}
+            {latestStaffResult ? (
               <>
                 <View style={styles.metricsRow}>
-                  <MetricCard label="Создано" value={iikoSync.result.staff?.created ?? 0} />
-                  <MetricCard label="Обновлено" value={iikoSync.result.staff?.updated ?? 0} />
-                  <MetricCard label="Архив" value={iikoSync.result.staff?.archived ?? 0} />
+                  <MetricCard label="Создано" value={latestStaffResult.staff?.created ?? 0} />
+                  <MetricCard label="Обновлено" value={latestStaffResult.staff?.updated ?? 0} />
+                  <MetricCard label="Архив" value={latestStaffResult.staff?.archived ?? 0} />
                 </View>
-                {iikoSync.result.error || iikoSync.result.disabled_reason ? (
-                  <Text style={styles.mutedText} selectable>{iikoSync.result.error ?? iikoSync.result.disabled_reason}</Text>
+                {latestStaffResult.error || latestStaffResult.disabled_reason ? (
+                  <Text style={styles.mutedText} selectable>{latestStaffResult.error ?? latestStaffResult.disabled_reason}</Text>
                 ) : null}
-                {iikoSync.result.new_credentials?.length ? (
+                {latestStaffResult.new_credentials?.length ? (
                   <View style={styles.roleAssignBox}>
                     <Text style={styles.roleAssignTitle}>Новые временные доступы</Text>
                     <Text style={styles.mutedText}>Показываются только в этом результате запуска. Передайте лично и попросите сменить пароль.</Text>
-                    {iikoSync.result.new_credentials.map((item) => (
+                    {latestStaffResult.new_credentials.map((item) => (
                       <View key={item.id} style={styles.miniRow}>
                         <View style={styles.flex}>
                           <Text style={styles.miniTitle}>{item.name} · {item.role}</Text>
@@ -1267,6 +1276,7 @@ export function AnnouncementsScreen({ snapshot, onMutate }: SectionProps) {
 
 export function SmmScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
   const [showForm, setShowForm] = useState(false);
+  const [blockWord, setBlockWord] = useState('');
   const [form, setForm] = useState({
     title: '',
     body: '',
@@ -1279,6 +1289,11 @@ export function SmmScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
   const posts = [...(snapshot.social_posts ?? [])].sort((a, b) =>
     String(b.published_at ?? b.created_at).localeCompare(String(a.published_at ?? a.created_at)),
   );
+  const importJobs = [...(snapshot.social_import_jobs ?? [])].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const moderationComments = [...(snapshot.social_post_comments ?? [])]
+    .filter((comment) => comment.status !== 'visible')
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  const blocklist = snapshot.social_comment_blocklist ?? [];
   const mediaByPost = new Map<string, NonNullable<DataSnapshot['social_post_media']>>();
   for (const media of snapshot.social_post_media ?? []) {
     const items = mediaByPost.get(media.post_id) ?? [];
@@ -1300,23 +1315,75 @@ export function SmmScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
           compact
           onPress={async () => {
             const result = await onMutate('POST', '/social/import/run', { sources: ['instagram', 'vk'] });
-            const sources = Array.isArray((result as { sources?: unknown[] } | null)?.sources)
-              ? ((result as { sources: Array<{ source: string; status: string; missing?: string[]; imported_count?: number }> }).sources)
-              : [];
-            setImportMessage(
-              sources
-                .map((item) =>
-                  item.status === 'disabled'
-                    ? `${item.source}: нужны ключи ${item.missing?.join(', ') ?? ''}`
-                    : `${item.source}: ${item.imported_count ?? 0} постов`,
-                )
-                .join('\n') || 'Импорт запущен',
-            );
+            const job = (result as { job?: { id?: string; status?: string; sources?: string[] } } | null)?.job;
+            setImportMessage(job?.id ? `Импорт поставлен в очередь: ${job.status ?? 'queued'} · ${job.sources?.join(', ') ?? 'sources'}` : 'Импорт поставлен в очередь');
             await onRefresh();
           }}
         />
       </View>
       {importMessage ? <Text style={styles.mutedText}>{importMessage}</Text> : null}
+      {importJobs.length ? (
+        <Card>
+          <Text style={styles.cardTitle}>Импорт</Text>
+          {importJobs.slice(0, 4).map((job) => (
+            <MiniRow
+              key={job.id}
+              title={`${job.status} · ${(job.sources ?? job.sources_json ?? []).join(', ') || 'sources'}`}
+              text={`${job.message ?? 'ожидает обработки'}${job.attempt_count ? ` · попытка ${job.attempt_count}/${job.max_attempts ?? 3}` : ''}${job.next_run_at ? ` · повтор ${shortDateTime(job.next_run_at)}` : ''} · ${shortDateTime(job.updated_at ?? job.created_at)}`}
+            />
+          ))}
+        </Card>
+      ) : null}
+      <Card>
+        <Text style={styles.cardTitle}>Модерация комментариев</Text>
+        <Field label="Добавить стоп-слово" value={blockWord} onChangeText={setBlockWord} />
+        <PrimaryButton
+          title="Добавить в стоп-лист"
+          onPress={async () => {
+            const word = blockWord.trim();
+            if (!word) return;
+            await onMutate('POST', '/social/comment-blocklist', { word });
+            setBlockWord('');
+            await onRefresh();
+          }}
+        />
+        {blocklist.length ? (
+          <View style={styles.categoryRow}>
+            {blocklist.slice(0, 8).map((item) => (
+              <Pill key={item.id} label={item.word} tone={item.status === 'active' ? 'bad' : 'neutral'} />
+            ))}
+          </View>
+        ) : null}
+        {moderationComments.length ? (
+          moderationComments.slice(0, 8).map((comment) => (
+            <View key={comment.id} style={smmStyles.inlinePanel}>
+              <Text style={styles.cardTitle}>{comment.guest_name ?? 'Гость'}</Text>
+              <Text style={styles.mutedText}>{comment.post_title ?? 'Пост'} · {shortDateTime(comment.created_at)} · {comment.status}</Text>
+              <Text style={styles.bodyText}>{comment.text}</Text>
+              <View style={styles.actionGrid}>
+                <SecondaryButton
+                  title="Показать"
+                  compact
+                  onPress={async () => {
+                    await onMutate('PATCH', `/social/comments/${comment.id}`, { status: 'visible' });
+                    await onRefresh();
+                  }}
+                />
+                <SecondaryButton
+                  title="Скрыть"
+                  compact
+                  onPress={async () => {
+                    await onMutate('PATCH', `/social/comments/${comment.id}`, { status: 'hidden' });
+                    await onRefresh();
+                  }}
+                />
+              </View>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.mutedText}>Нет комментариев на модерацию.</Text>
+        )}
+      </Card>
       {posts.length ? (
         posts.map((post) => {
           const media = mediaByPost.get(post.id) ?? [];
@@ -1381,6 +1448,12 @@ export function SmmScreen({ snapshot, onMutate, onRefresh }: SectionProps) {
 }
 
 const smmStyles = StyleSheet.create({
+  inlinePanel: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#F7F1E8',
+  },
   preview: {
     width: '100%',
     height: 180,
@@ -2047,6 +2120,8 @@ export function LegacyProfileScreen({ snapshot, onLogout }: SectionProps) {
 export function AdminScreen({ snapshot, navigate }: SectionProps) {
   const status = snapshot.server_status;
   const brief = snapshot.shift_brief;
+  const security = snapshot.security_status;
+  const securityEvents = security?.security_events ?? [];
   const adminSections: SectionKey[] = ['staff', 'schedule', 'menu', 'stoplist', 'floor', 'reservations', 'events', 'tasks', 'notifications', 'analytics'];
   const availableAdminSections = adminSections
     .filter((key) => snapshot.sections.includes(key))
@@ -2063,6 +2138,23 @@ export function AdminScreen({ snapshot, navigate }: SectionProps) {
         </View>
         <Text style={styles.mutedText}>Последняя синхронизация: {shortDateTime(snapshot.server_time)}</Text>
       </Card>
+      {security ? (
+        <Card>
+          <Text style={styles.cardTitle}>Безопасность</Text>
+          <View style={styles.metricsRow}>
+            <MetricCard label="429/мин" value={security.per_minute?.rate_limits ?? 0} detail="rate-limit" />
+            <MetricCard label="Таймауты/мин" value={security.per_minute?.external_api_timeouts ?? 0} detail="API" />
+            <MetricCard label="События" value={securityEvents.length} detail="последние" />
+          </View>
+          {securityEvents.slice(-5).reverse().map((event, index) => (
+            <MiniRow
+              key={`${String(event.request_id ?? index)}-${String(event.ts ?? index)}`}
+              title={`${String(event.type ?? 'event')} · ${String(event.status ?? '')}`}
+              text={`${String(event.method ?? '')} ${String(event.path ?? '')} · ${String(event.request_id ?? 'no request id')}`}
+            />
+          ))}
+        </Card>
+      ) : null}
       {brief ? (
         <Card>
           <Text style={styles.cardTitle}>Готовность смены</Text>

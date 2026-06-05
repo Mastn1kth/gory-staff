@@ -1,4 +1,5 @@
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const path = require('node:path');
 
 const serverRoot = path.resolve(__dirname, '..');
@@ -35,6 +36,55 @@ async function api(baseUrl, route, options = {}) {
   return body;
 }
 
+async function getFreePort(host = '127.0.0.1') {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref?.();
+    server.once('error', reject);
+    server.listen(0, host, () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function probeHealth(baseUrl, timeoutMs = 1000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  timeout.unref?.();
+  try {
+    const response = await fetch(`${baseUrl}/health`, {
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    const body = await readJson(response);
+    return { ok: response.ok && Boolean(body?.ok), body };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function waitForServerHealth({ baseUrl, child, stdout, stderr, timeoutMs = 25000 }) {
+  const startedAt = Date.now();
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (child.exitCode !== null) break;
+    try {
+      const health = await probeHealth(baseUrl);
+      if (health.ok) return health.body;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(200);
+  }
+
+  child.kill('SIGTERM');
+  const details = lastError ? `\nLAST ERROR:\n${lastError.message}` : '';
+  throw new Error(`Server did not start.${details}\nSTDOUT:\n${stdout.join('')}\nSTDERR:\n${stderr.join('')}`);
+}
+
 function serverEnv(port, extraEnv = {}) {
   return {
     ...process.env,
@@ -54,7 +104,7 @@ function serverEnv(port, extraEnv = {}) {
 }
 
 async function startTestServer(extraEnv = {}) {
-  const port = 6100 + Math.floor(Math.random() * 500);
+  const port = await getFreePort();
   const stdout = [];
   const stderr = [];
   const child = spawn(process.execPath, ['src/index.js'], {
@@ -67,29 +117,21 @@ async function startTestServer(extraEnv = {}) {
   child.stderr.on('data', (chunk) => stderr.push(String(chunk)));
 
   const baseUrl = `http://127.0.0.1:${port}`;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (child.exitCode !== null) break;
-    try {
-      const health = await api(baseUrl, '/health');
-      if (health.ok) {
-        const close = () => child.kill('SIGTERM');
-        return {
-          baseUrl,
-          close,
-          stop: close,
-        };
-      }
-    } catch {
-      await delay(250);
-    }
-  }
-
-  child.kill('SIGTERM');
-  throw new Error(`Server did not start.\nSTDOUT:\n${stdout.join('')}\nSTDERR:\n${stderr.join('')}`);
+  await waitForServerHealth({ baseUrl, child, stdout, stderr });
+  const close = () => child.kill('SIGTERM');
+  return {
+    baseUrl,
+    close,
+    stop: close,
+  };
 }
 
 module.exports = {
   api,
+  delay,
+  getFreePort,
   readJson,
+  serverEnv,
   startTestServer,
+  waitForServerHealth,
 };

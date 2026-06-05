@@ -4,14 +4,16 @@
 
 const crypto = require('crypto');
 const https = require('https');
+const { ExternalFetchTimeoutError, timeoutFromEnv } = require('../http');
 
 class TwilioClient {
-  constructor(accountSid, authToken, fromPhone) {
+  constructor(accountSid, authToken, fromPhone, options = {}) {
     this.accountSid = accountSid;
     this.authToken = authToken;
     this.fromPhone = fromPhone;
     this.baseUrl = 'api.twilio.com';
     this.enabled = Boolean(accountSid && authToken && fromPhone);
+    this.timeoutMs = options.timeoutMs ?? timeoutFromEnv('TWILIO_REQUEST_TIMEOUT_MS', 10000);
   }
 
   /**
@@ -58,6 +60,9 @@ class TwilioClient {
       });
 
       req.on('error', reject);
+      req.setTimeout(this.timeoutMs, () => {
+        req.destroy(new ExternalFetchTimeoutError(this.timeoutMs));
+      });
       if (body) {
         req.write(body);
       }
